@@ -1,0 +1,6 @@
+.DS_Store
+bin/
+projects/*/research/
+projects/*/outline/
+projects/*/draft/
+projects/*/factcheck/

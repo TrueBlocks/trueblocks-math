@@ -1,0 +1,4 @@
+*.md
+*.yaml
+*.docx
+.DS_Store
