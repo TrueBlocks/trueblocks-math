@@ -2,9 +2,12 @@ package pipeline
 
 import (
 	"fmt"
+	randv2 "math/rand/v2"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,11 +22,14 @@ const (
 	StageOutline
 	StageDraft
 	StageFactcheck
+	StageIllustrate
 	StageDraft2
+	StageEject
+	StageExport
 	StageDone
 )
 
-var stageNames = []string{"ideas", "research", "outline", "draft", "factcheck", "draft2"}
+var stageNames = []string{"ideas", "research", "outline", "draft", "factcheck", "illustrate", "draft2", "eject", "export"}
 
 func (s Stage) String() string {
 	if int(s) < len(stageNames) {
@@ -35,7 +41,7 @@ func (s Stage) String() string {
 func (s Stage) Dir() string { return s.String() }
 
 func NextStage(s Stage) Stage {
-	if s < StageDraft2 {
+	if s < StageExport {
 		return s + 1
 	}
 	return StageDone
@@ -59,6 +65,7 @@ type EssayMeta struct {
 	Order     int     `yaml:"order"`
 	Status    string  `yaml:"status"`
 	Model     string  `yaml:"model"`
+	Arc       string  `yaml:"arc,omitempty"`
 	Created   string  `yaml:"created"`
 	Started   string  `yaml:"started,omitempty"`
 	Completed string  `yaml:"completed,omitempty"`
@@ -74,6 +81,7 @@ type EssayState struct {
 	Part         int
 	PartTitle    string
 	Order        int
+	Arc          string
 	CurrentStage Stage
 	Status       string
 	Meta         map[Stage]*EssayMeta
@@ -86,14 +94,14 @@ func (e *EssayState) NextAction() Stage {
 	if e.CurrentStage == StageIdeas && e.Status == "pending" {
 		return StageResearch
 	}
-	if e.Status == "final" && e.CurrentStage < StageDraft2 {
+	if e.Status == "final" && e.CurrentStage < StageExport {
 		return NextStage(e.CurrentStage)
 	}
 	return StageDone
 }
 
 func (e *EssayState) IsDone() bool {
-	return e.CurrentStage == StageDraft2 && e.Status == "final"
+	return e.CurrentStage == StageExport && e.Status == "final"
 }
 
 func (e *EssayState) IsAvailable() bool {
@@ -112,6 +120,9 @@ type PipelineState struct {
 }
 
 func NewPipelineState(project, baseDir string) *PipelineState {
+	for _, name := range append(stageNames, "images", "draft3") {
+		os.MkdirAll(filepath.Join(baseDir, name), 0755)
+	}
 	return &PipelineState{
 		Project: project,
 		BaseDir: baseDir,
@@ -162,6 +173,7 @@ func (ps *PipelineState) LoadFromDisk() error {
 					Part:         meta.Part,
 					PartTitle:    meta.PartTitle,
 					Order:        meta.Order,
+					Arc:          meta.Arc,
 					CurrentStage: stage,
 					Status:       meta.Status,
 					Meta:         make(map[Stage]*EssayMeta),
@@ -170,6 +182,9 @@ func (ps *PipelineState) LoadFromDisk() error {
 			}
 
 			essay.Meta[stage] = &meta
+			if meta.Arc != "" {
+				essay.Arc = meta.Arc
+			}
 			if stage > essay.CurrentStage {
 				essay.CurrentStage = stage
 				essay.Status = meta.Status
@@ -206,9 +221,40 @@ func (ps *PipelineState) WriteContent(stage Stage, slug, content string) error {
 	return os.WriteFile(mdPath, []byte(content), 0644)
 }
 
+func ParseDebug(debug string) (book string, part, order int, ok bool) {
+	parts := strings.Split(debug, ".")
+	if len(parts) != 3 {
+		return "", 0, 0, false
+	}
+	book = parts[0]
+	part, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return "", 0, 0, false
+	}
+	order, err = strconv.Atoi(parts[2])
+	if err != nil {
+		return "", 0, 0, false
+	}
+	return book, part, order, true
+}
+
 func (ps *PipelineState) SelectForCycle(cfg *PipelineConfig) []*EssayState {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
+
+	if cfg.Debug != "" {
+		book, part, order, ok := ParseDebug(cfg.Debug)
+		if !ok {
+			return nil
+		}
+		for _, essay := range ps.Essays {
+			if essay.Book == book && essay.Part == part && essay.Order == order {
+				return []*EssayState{essay}
+			}
+		}
+		return nil
+	}
+
 	maxActions := cfg.MaxPerCycle
 	if ps.CycleCount < maxActions {
 		maxActions = ps.CycleCount + 1
@@ -227,6 +273,7 @@ func (ps *PipelineState) SelectForCycle(cfg *PipelineConfig) []*EssayState {
 	}
 
 	sortByBookOrder(newEssays)
+	randv2.Shuffle(len(newEssays), func(i, j int) { newEssays[i], newEssays[j] = newEssays[j], newEssays[i] })
 	sortByBookOrder(continuingEssays)
 
 	var selected []*EssayState
@@ -278,7 +325,7 @@ func (ps *PipelineState) Summary() map[string]int {
 	defer ps.mu.Unlock()
 	counts := map[string]int{
 		"pending": 0, "research": 0, "outline": 0,
-		"draft": 0, "factcheck": 0, "draft2": 0, "done": 0, "error": 0,
+		"draft": 0, "factcheck": 0, "draft2": 0, "illustrate": 0, "done": 0, "error": 0,
 	}
 	for _, e := range ps.Essays {
 		if e.Status == "error" {

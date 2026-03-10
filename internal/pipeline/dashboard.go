@@ -235,7 +235,7 @@ func (d *Dashboard) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 	totalSummary := map[string]int{
 		"pending": 0, "research": 0, "outline": 0,
-		"draft": 0, "factcheck": 0, "draft2": 0, "done": 0, "error": 0,
+		"draft": 0, "factcheck": 0, "draft2": 0, "illustrate": 0, "done": 0, "error": 0,
 	}
 
 	var projectStatuses []projectStatusResponse
@@ -362,9 +362,12 @@ func (d *Dashboard) handleEject(w http.ResponseWriter, r *http.Request) {
 
 	mdFile := filepath.Join(ps.BaseDir, "draft2", slug+".md")
 	if _, err := os.Stat(mdFile); os.IsNotExist(err) {
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"ok":false,"error":"draft2 file not found"}`)
-		return
+		mdFile = filepath.Join(ps.BaseDir, "illustrate", slug+".md")
+		if _, err := os.Stat(mdFile); os.IsNotExist(err) {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"ok":false,"error":"neither draft2 nor illustrate file found"}`)
+			return
+		}
 	}
 
 	raw, err := os.ReadFile(mdFile)
@@ -408,6 +411,19 @@ func (d *Dashboard) handleEject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	dataDir := filepath.Join(d.Runner.BaseDir, "data")
+	renderCmd := exec.Command("imagerender", "--data", dataDir, "--slug", slug, ps.BaseDir)
+	if output, err := renderCmd.CombinedOutput(); err != nil {
+		d.Runner.Log.Printf("[%s] WARNING: imagerender %s: %v %s", project, slug, err, string(output))
+	} else {
+		d.Runner.Log.Printf("[%s] imagerender %s: %s", project, slug, strings.TrimSpace(string(output)))
+	}
+
+	swapCmd := exec.Command("imageswap", "--images", filepath.Join(ps.BaseDir, "images"), outFile)
+	if output, err := swapCmd.CombinedOutput(); err != nil {
+		d.Runner.Log.Printf("[%s] WARNING: imageswap %s: %v %s", project, slug, err, string(output))
+	}
+
 	d.Runner.Log.Printf("[%s] Ejected %s → %s", project, slug, outFile)
 
 	w.Header().Set("Content-Type", "application/json")
@@ -445,16 +461,12 @@ func (d *Dashboard) handleOpenDocx(w http.ResponseWriter, r *http.Request) {
 }
 
 var (
-	reDisplayMath = regexp.MustCompile(`(?s)\$\$.*?\$\$`)
-	reInlineMath  = regexp.MustCompile(`\$[^$\n]+\$`)
-	reHTMLTag     = regexp.MustCompile(`<[^>]+>`)
-	reFencedCode  = regexp.MustCompile("(?s)```.*?```")
+	reHTMLTag    = regexp.MustCompile(`<[^>]+>`)
+	reFencedCode = regexp.MustCompile("(?s)```.*?```")
 )
 
 func sanitizeForDocx(md string) string {
 	md = reFencedCode.ReplaceAllString(md, "[markdown removed]")
-	md = reDisplayMath.ReplaceAllString(md, "[markdown removed]")
-	md = reInlineMath.ReplaceAllString(md, "[markdown removed]")
 	md = reHTMLTag.ReplaceAllString(md, "")
 
 	var lines []string
@@ -529,7 +541,7 @@ func (d *Dashboard) handleSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d *Dashboard) handleDiskStats(w http.ResponseWriter, r *http.Request) {
-	stages := []string{"ideas", "research", "outline", "draft", "factcheck", "draft2", "draft3"}
+	stages := []string{"ideas", "research", "outline", "draft", "factcheck", "illustrate", "draft2", "draft3"}
 	counts := make(map[string]int, len(stages))
 
 	for _, ps := range d.Runner.Projects {
@@ -572,6 +584,7 @@ type essayJSON struct {
 	Order     int    `json:"order"`
 	Stage     string `json:"stage"`
 	Status    string `json:"status"`
+	Arc       string `json:"arc,omitempty"`
 	Error     string `json:"error,omitempty"`
 	Ejected   string `json:"ejected"`
 	WordCount int    `json:"word_count,omitempty"`
@@ -602,14 +615,17 @@ func (d *Dashboard) handleEssays(w http.ResponseWriter, r *http.Request) {
 			if e.IsDone() {
 				docxPath := filepath.Join(ps.BaseDir, "draft3", e.Slug+".docx")
 				md2Path := filepath.Join(ps.BaseDir, "draft2", e.Slug+".md")
+				illPath := filepath.Join(ps.BaseDir, "illustrate", e.Slug+".md")
 				if di, err := os.Stat(docxPath); err == nil {
 					ejected = "current"
 					if mi, err := os.Stat(md2Path); err == nil && mi.ModTime().After(di.ModTime()) {
 						ejected = "stale"
+					} else if mi, err := os.Stat(illPath); err == nil && mi.ModTime().After(di.ModTime()) {
+						ejected = "stale"
 					}
 				}
 			}
-			for _, s := range []string{"draft2", "draft", "outline"} {
+			for _, s := range []string{"draft2", "illustrate", "draft", "outline"} {
 				path := filepath.Join(ps.BaseDir, s, e.Slug+".md")
 				if raw, err := os.ReadFile(path); err == nil {
 					words := strings.Fields(string(raw))
@@ -628,6 +644,7 @@ func (d *Dashboard) handleEssays(w http.ResponseWriter, r *http.Request) {
 				Order:     e.Order,
 				Stage:     stage,
 				Status:    status,
+				Arc:       e.Arc,
 				Error:     errMsg,
 				Ejected:   ejected,
 				WordCount: wordCount,
@@ -666,13 +683,15 @@ func stageRank(stage, ejected string) int {
 		return 4
 	case "draft2":
 		return 5
+	case "illustrate":
+		return 6
 	case "done":
 		if ejected == "current" {
-			return 8
+			return 9
 		}
-		return 6
-	default:
 		return 7
+	default:
+		return 8
 	}
 }
 
@@ -821,7 +840,7 @@ const dashboardHTML = `<!DOCTYPE html>
 
   <table>
     <thead>
-      <tr><th>Project</th><th>#</th><th>Length</th><th>Title</th><th>Stage</th><th>Status</th><th></th></tr>
+      <tr><th>Project</th><th>#</th><th>Length</th><th>Title</th><th>Arc</th><th>Stage</th><th>Status</th><th></th></tr>
     </thead>
     <tbody id="essayTable"></tbody>
   </table>
@@ -966,6 +985,7 @@ async function refresh() {
     '<td>' + idStr + '</td>' +
     '<td>' + lenStr + '</td>' +
     '<td><a href="#" onclick="openFolder(\x27' + encodeURIComponent(e.project) + '\x27,\x27' + encodeURIComponent(e.slug) + '\x27);return false" style="color:#e94560;text-decoration:none">' + esc(e.title) + '</a></td>' +
+    '<td>' + (e.arc ? esc(e.arc) : '') + '</td>' +
     '<td><span class="stage-badge stage-' + e.stage + '">' + e.stage + '</span></td>' +
     '<td class="status-' + e.status + '">' + e.status + (e.error ? ' <span title="' + esc(e.error) + '" style="cursor:help">\u26a0</span>' : '') + '</td>' +
     '<td>' + (function() {

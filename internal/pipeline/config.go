@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -17,14 +19,16 @@ type Config struct {
 
 type APIConfig struct {
 	AnthropicKey string `yaml:"anthropic_key"`
+	OpenAIKey    string `yaml:"openai_key"`
 }
 
 type ModelsConfig struct {
-	Research  string `yaml:"research"`
-	Outline   string `yaml:"outline"`
-	Draft     string `yaml:"draft"`
-	Factcheck string `yaml:"factcheck"`
-	Draft2    string `yaml:"draft2"`
+	Research   string `yaml:"research"`
+	Outline    string `yaml:"outline"`
+	Draft      string `yaml:"draft"`
+	Factcheck  string `yaml:"factcheck"`
+	Draft2     string `yaml:"draft2"`
+	Illustrate string `yaml:"illustrate"`
 }
 
 type PipelineConfig struct {
@@ -37,6 +41,7 @@ type PipelineConfig struct {
 	Verbose       bool    `yaml:"verbose"`
 	ReadMean      float64 `yaml:"read_mean"`
 	ReadSpread    float64 `yaml:"read_spread"`
+	Debug         string  `yaml:"debug"`
 }
 
 type DashboardConfig struct {
@@ -56,11 +61,12 @@ func LoadConfig(path string) (*Config, error) {
 
 	cfg := &Config{
 		Models: ModelsConfig{
-			Research:  "claude-sonnet-4-20250514",
-			Outline:   "claude-sonnet-4-20250514",
-			Draft:     "claude-sonnet-4-20250514",
-			Factcheck: "claude-sonnet-4-20250514",
-			Draft2:    "claude-sonnet-4-20250514",
+			Research:   "claude-sonnet-4-20250514",
+			Outline:    "claude-sonnet-4-20250514",
+			Draft:      "claude-sonnet-4-20250514",
+			Factcheck:  "claude-sonnet-4-20250514",
+			Draft2:     "claude-sonnet-4-20250514",
+			Illustrate: "claude-sonnet-4-20250514",
 		},
 		Pipeline: PipelineConfig{
 			MaxPerCycle:   6,
@@ -85,9 +91,30 @@ func LoadConfig(path string) (*Config, error) {
 }
 
 func SaveConfig(path string, cfg *Config) error {
-	data, err := yaml.Marshal(cfg)
+	raw, err := os.ReadFile(path)
 	if err != nil {
-		return fmt.Errorf("marshaling config: %w", err)
+		return fmt.Errorf("reading config for update: %w", err)
 	}
-	return os.WriteFile(path, data, 0644)
+
+	lines := strings.Split(string(raw), "\n")
+	set := func(key, val string) {
+		re := regexp.MustCompile(`(?i)^(\s*` + regexp.QuoteMeta(key) + `\s*:\s*)(\S.*?)(\s*#.*)?$`)
+		for i, line := range lines {
+			if m := re.FindStringSubmatchIndex(line); m != nil {
+				prefix := line[m[2]:m[3]]
+				suffix := ""
+				if m[6] >= 0 {
+					suffix = line[m[6]:m[7]]
+				}
+				lines[i] = prefix + val + suffix
+			}
+		}
+	}
+
+	set("cycle_interval", fmt.Sprintf("%d", cfg.Pipeline.CycleInterval))
+	set("verbose", fmt.Sprintf("%t", cfg.Pipeline.Verbose))
+	set("read_mean", fmt.Sprintf("%.1f", cfg.Pipeline.ReadMean))
+	set("read_spread", fmt.Sprintf("%.1f", cfg.Pipeline.ReadSpread))
+
+	return os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0644)
 }

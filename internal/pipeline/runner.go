@@ -7,17 +7,22 @@ import (
 	"math"
 	randv2 "math/rand/v2"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 )
 
 type Runner struct {
-	Config   *Config
-	Projects []*PipelineState
-	Client   *AnthropicClient
-	Log      *log.Logger
-	BaseDir  string
+	Config     *Config
+	Projects   []*PipelineState
+	Client     *AnthropicClient
+	Log        *log.Logger
+	BaseDir    string
+	ConfigPath string
+	CLIDryRun  bool
 }
 
 func NewRunner(cfg *Config, baseDir string) *Runner {
@@ -69,7 +74,27 @@ func (r *Runner) LoadState() error {
 	return nil
 }
 
+func (r *Runner) ReloadConfig() {
+	if r.ConfigPath == "" {
+		return
+	}
+	updated, err := LoadConfig(r.ConfigPath)
+	if err != nil {
+		r.Log.Printf("Config reload failed: %v (keeping previous settings)", err)
+		return
+	}
+	port := r.Config.Dashboard.Port
+	wasCliDry := r.CLIDryRun
+	*r.Config = *updated
+	r.Config.Dashboard.Port = port
+	if wasCliDry {
+		r.Config.Pipeline.DryRun = true
+	}
+	r.Client.APIKey = r.Config.API.AnthropicKey
+}
+
 func (r *Runner) RunCycle(ctx context.Context) ([]string, error) {
+	r.ReloadConfig()
 	var allActions []string
 	for _, ps := range r.Projects {
 		if ctx.Err() != nil {
@@ -89,9 +114,15 @@ func (r *Runner) runProjectCycle(ctx context.Context, ps *PipelineState) ([]stri
 		return nil, fmt.Errorf("loading state: %w", err)
 	}
 
+	r.renderAllImages(ps)
+
 	selected := ps.SelectForCycle(&r.Config.Pipeline)
 	if len(selected) == 0 {
 		return nil, nil
+	}
+
+	if r.Config.Pipeline.Debug != "" {
+		return r.runDebugCycle(ctx, ps, selected[0])
 	}
 
 	ps.CycleCount++
@@ -153,7 +184,44 @@ func (r *Runner) runProjectCycle(ctx context.Context, ps *PipelineState) ([]stri
 	return actions, nil
 }
 
+func (r *Runner) runDebugCycle(ctx context.Context, ps *PipelineState, essay *EssayState) ([]string, error) {
+	r.Log.Printf("[%s] DEBUG MODE: %s (%s)", ps.Project, essay.Slug, r.Config.Pipeline.Debug)
+
+	var actions []string
+	for {
+		if ctx.Err() != nil {
+			return actions, ctx.Err()
+		}
+
+		nextStage := essay.NextAction()
+		if nextStage == StageDone {
+			r.Log.Printf("  %s: all stages complete", essay.Slug)
+			break
+		}
+
+		action := fmt.Sprintf("[%s] %s → %s", ps.Project, essay.Slug, nextStage)
+		r.Log.Printf("  %s → %s", essay.Slug, nextStage)
+
+		if err := r.processEssay(ctx, ps, essay, nextStage); err != nil {
+			r.Log.Printf("  ERROR: %s: %v", essay.Slug, err)
+			r.markError(ps, essay, nextStage, err)
+			actions = append(actions, fmt.Sprintf("%s (ERROR: %v)", action, err))
+			return actions, err
+		}
+		actions = append(actions, action)
+	}
+
+	return actions, nil
+}
+
 func (r *Runner) processEssay(ctx context.Context, ps *PipelineState, essay *EssayState, targetStage Stage) error {
+	if targetStage == StageEject {
+		return r.ejectEssay(ps, essay)
+	}
+	if targetStage == StageExport {
+		return r.exportEssay(ps, essay)
+	}
+
 	prompt, model, err := r.buildPrompt(ps, essay, targetStage)
 	if err != nil {
 		return fmt.Errorf("building prompt: %w", err)
@@ -180,6 +248,14 @@ func (r *Runner) processEssay(ctx context.Context, ps *PipelineState, essay *Ess
 
 	if err := ps.WriteContent(targetStage, essay.Slug, result.Content); err != nil {
 		return fmt.Errorf("writing content: %w", err)
+	}
+
+	if targetStage == StageIllustrate {
+		if err := r.writeImageSources(ps, essay.Slug, result.Content); err != nil {
+			r.Log.Printf("    WARNING: writing image sources: %v", err)
+		} else if !r.Config.Pipeline.DryRun {
+			r.renderImages(ps, essay.Slug)
+		}
 	}
 
 	r.markComplete(ps, essay, targetStage, model, result)
@@ -220,13 +296,16 @@ func (r *Runner) buildPrompt(ps *PipelineState, essay *EssayState, targetStage S
 	case StageOutline:
 		model = r.Config.Models.Outline
 		research := readContent(StageResearch)
-		prompt = OutlinePrompt(ideaMeta.Title, research, targetWords)
+		arc := RandomArc()
+		essay.Arc = arc.Name
+		prompt = OutlinePrompt(ideaMeta.Title, research, targetWords, arc)
 
 	case StageDraft:
 		model = r.Config.Models.Draft
 		outline := readContent(StageOutline)
 		research := readContent(StageResearch)
-		prompt = DraftPrompt(ideaMeta.Title, outline, research, targetWords)
+		arc, _ := ArcByName(essay.Arc)
+		prompt = DraftPrompt(ideaMeta.Title, outline, research, targetWords, arc)
 
 	case StageFactcheck:
 		model = r.Config.Models.Factcheck
@@ -238,7 +317,15 @@ func (r *Runner) buildPrompt(ps *PipelineState, essay *EssayState, targetStage S
 		model = r.Config.Models.Draft2
 		draft := readContent(StageDraft)
 		factcheck := readContent(StageFactcheck)
-		prompt = Draft2Prompt(ideaMeta.Title, draft, factcheck, targetWords)
+		illustrate := readContent(StageIllustrate)
+		arc, _ := ArcByName(essay.Arc)
+		prompt = Draft2Prompt(ideaMeta.Title, draft, factcheck, illustrate, targetWords, arc)
+
+	case StageIllustrate:
+		model = r.Config.Models.Illustrate
+		draft := readContent(StageDraft)
+		factcheck := readContent(StageFactcheck)
+		prompt = IllustratePrompt(ideaMeta.Title, draft, factcheck, essay.Slug)
 
 	default:
 		return "", "", fmt.Errorf("unknown target stage: %s", targetStage)
@@ -274,6 +361,7 @@ func (r *Runner) markInProgress(ps *PipelineState, essay *EssayState, stage Stag
 		Order:     essay.Order,
 		Status:    "in-progress",
 		Model:     model,
+		Arc:       essay.Arc,
 		Created:   essay.Meta[StageIdeas].Created,
 		Started:   nowString(),
 	}
@@ -295,6 +383,7 @@ func (r *Runner) markComplete(ps *PipelineState, essay *EssayState, stage Stage,
 		Order:     essay.Order,
 		Status:    "final",
 		Model:     model,
+		Arc:       essay.Arc,
 		Created:   essay.Meta[StageIdeas].Created,
 		Started:   nowString(),
 		Completed: nowString(),
@@ -320,6 +409,7 @@ func (r *Runner) markError(ps *PipelineState, essay *EssayState, stage Stage, er
 		Order:     essay.Order,
 		Status:    "error",
 		Model:     "",
+		Arc:       essay.Arc,
 		Created:   essay.Meta[StageIdeas].Created,
 		Started:   nowString(),
 		Error:     err.Error(),
@@ -346,4 +436,116 @@ func (r *Runner) TotalCost() float64 {
 		total += ps.SessionCost
 	}
 	return total
+}
+
+type imageSource struct {
+	filename string
+	method   string
+	source   string
+}
+
+func parseImageSources(content string) []imageSource {
+	var sources []imageSource
+	sepIdx := strings.Index(content, "---IMAGE-SOURCES---")
+	if sepIdx < 0 {
+		return nil
+	}
+	remainder := content[sepIdx:]
+
+	re := regexp.MustCompile(`---IMAGE:([^|]+)\|method:(\w+)---\n([\s\S]*?)---END-IMAGE---`)
+	matches := re.FindAllStringSubmatch(remainder, -1)
+	for _, m := range matches {
+		sources = append(sources, imageSource{
+			filename: strings.TrimSpace(m[1]),
+			method:   strings.TrimSpace(m[2]),
+			source:   strings.TrimSpace(m[3]),
+		})
+	}
+	return sources
+}
+
+func (r *Runner) writeImageSources(ps *PipelineState, slug, content string) error {
+	sources := parseImageSources(content)
+	if len(sources) == 0 {
+		r.Log.Printf("    no image sources found in illustrate output")
+		return nil
+	}
+
+	imgDir := filepath.Join(ps.BaseDir, "images", slug)
+	if err := os.MkdirAll(imgDir, 0755); err != nil {
+		return fmt.Errorf("creating images dir: %w", err)
+	}
+
+	for _, src := range sources {
+		baseName := strings.TrimSuffix(src.filename, filepath.Ext(src.filename))
+
+		var ext string
+		switch src.method {
+		case "mermaid":
+			ext = ".mermaid"
+		case "r":
+			ext = ".R"
+		case "ai":
+			ext = ".ai-prompt.txt"
+		default:
+			r.Log.Printf("    unknown image method: %s for %s", src.method, src.filename)
+			continue
+		}
+
+		srcPath := filepath.Join(imgDir, baseName+ext)
+		if err := os.WriteFile(srcPath, []byte(src.source), 0644); err != nil {
+			return fmt.Errorf("writing %s: %w", srcPath, err)
+		}
+
+		metaContent := fmt.Sprintf("filename: %s\nmethod: %s\ndescription: %s\n",
+			src.filename, src.method, baseName)
+		metaPath := filepath.Join(imgDir, baseName+".meta.yaml")
+		if err := os.WriteFile(metaPath, []byte(metaContent), 0644); err != nil {
+			return fmt.Errorf("writing %s: %w", metaPath, err)
+		}
+
+		r.Log.Printf("    image source: %s (%s)", baseName+ext, src.method)
+	}
+
+	essayText := content
+	if sepIdx := strings.Index(content, "---IMAGE-SOURCES---"); sepIdx > 0 {
+		essayText = strings.TrimSpace(content[:sepIdx])
+	}
+	if err := ps.WriteContent(StageIllustrate, slug, essayText); err != nil {
+		return fmt.Errorf("rewriting illustrate content: %w", err)
+	}
+
+	return nil
+}
+
+func (r *Runner) renderAllImages(ps *PipelineState) {
+	dataDir := filepath.Join(r.BaseDir, "data")
+	cmd := exec.Command("imagerender", "--data", dataDir, ps.BaseDir)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		r.Log.Printf("[%s] WARNING: imagerender: %v\n%s", ps.Project, err, string(output))
+		return
+	}
+	lines := strings.TrimSpace(string(output))
+	for _, line := range strings.Split(lines, "\n") {
+		if strings.Contains(line, "FAILED") || strings.Contains(line, "rendered") {
+			r.Log.Printf("[%s] imagerender: %s", ps.Project, line)
+		}
+	}
+}
+
+func (r *Runner) renderImages(ps *PipelineState, slug string) {
+	dataDir := filepath.Join(r.BaseDir, "data")
+	cmd := exec.Command("imagerender", "--data", dataDir, "--slug", slug, ps.BaseDir)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		r.Log.Printf("    WARNING: imagerender %s: %v\n%s", slug, err, string(output))
+		return
+	}
+	lines := strings.TrimSpace(string(output))
+	if lines != "" {
+		for _, line := range strings.Split(lines, "\n") {
+			r.Log.Printf("    imagerender: %s", line)
+		}
+	}
 }

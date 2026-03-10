@@ -42,6 +42,8 @@ func main() {
 
 	logBuf := pipeline.NewLogBuffer(os.Stdout, 1000)
 	runner := pipeline.NewRunner(cfg, cwd)
+	runner.ConfigPath = *configPath
+	runner.CLIDryRun = *dryRun
 	runner.Log = log.New(logBuf, "", 0)
 
 	var dash *pipeline.Dashboard
@@ -122,7 +124,7 @@ func main() {
 		cycleRunning.Store(false)
 	}
 
-	if *once {
+	if *once && cfg.Pipeline.Debug == "" {
 		runCycle()
 		return
 	}
@@ -148,6 +150,18 @@ func main() {
 	}()
 
 	runner.Log.Printf("Dashboard: http://127.0.0.1:%d", cfg.Dashboard.Port)
+
+	if cfg.Pipeline.Debug != "" {
+		runCycle()
+		runner.Log.Printf("DEBUG complete — dashboard still running at http://127.0.0.1:%d", cfg.Dashboard.Port)
+		<-ctx.Done()
+		for cycleRunning.Load() {
+			time.Sleep(100 * time.Millisecond)
+		}
+		printFinalSummary(runner)
+		return
+	}
+
 	runner.Log.Printf("Auto-cycling every %d seconds (step from dashboard to run immediately)", interval)
 
 	dash.SetNextCycleAt(time.Now().Add(time.Duration(interval) * time.Second))
