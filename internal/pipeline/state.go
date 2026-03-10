@@ -58,6 +58,7 @@ func StageFromString(s string) Stage {
 type EssayMeta struct {
 	Slug      string  `yaml:"slug"`
 	Title     string  `yaml:"title"`
+	Type      string  `yaml:"type"`
 	Book      string  `yaml:"book"`
 	Part      int     `yaml:"part"`
 	PartTitle string  `yaml:"part_title"`
@@ -65,6 +66,7 @@ type EssayMeta struct {
 	Status    string  `yaml:"status"`
 	Model     string  `yaml:"model"`
 	Arc       string  `yaml:"arc,omitempty"`
+	Ending    string  `yaml:"ending,omitempty"`
 	Created   string  `yaml:"created"`
 	Started   string  `yaml:"started,omitempty"`
 	Completed string  `yaml:"completed,omitempty"`
@@ -76,11 +78,13 @@ type EssayMeta struct {
 type EssayState struct {
 	Slug         string
 	Title        string
+	Type         string
 	Book         string
 	Part         int
 	PartTitle    string
 	Order        int
 	Arc          string
+	Ending       string
 	CurrentStage Stage
 	Status       string
 	Meta         map[Stage]*EssayMeta
@@ -168,11 +172,13 @@ func (ps *PipelineState) LoadFromDisk() error {
 				essay = &EssayState{
 					Slug:         meta.Slug,
 					Title:        meta.Title,
+					Type:         meta.Type,
 					Book:         meta.Book,
 					Part:         meta.Part,
 					PartTitle:    meta.PartTitle,
 					Order:        meta.Order,
 					Arc:          meta.Arc,
+					Ending:       meta.Ending,
 					CurrentStage: stage,
 					Status:       meta.Status,
 					Meta:         make(map[Stage]*EssayMeta),
@@ -181,8 +187,14 @@ func (ps *PipelineState) LoadFromDisk() error {
 			}
 
 			essay.Meta[stage] = &meta
+			if meta.Type != "" {
+				essay.Type = meta.Type
+			}
 			if meta.Arc != "" {
 				essay.Arc = meta.Arc
+			}
+			if meta.Ending != "" {
+				essay.Ending = meta.Ending
 			}
 			if stage > essay.CurrentStage {
 				essay.CurrentStage = stage
