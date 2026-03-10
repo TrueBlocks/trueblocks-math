@@ -17,6 +17,7 @@ import (
 
 func main() {
 	imagesDir := flag.String("images", "", "path to images directory (contains slug subdirs)")
+	slugFlag := flag.String("slug", "", "override slug (default: derived from docx filename)")
 	flag.Parse()
 
 	if flag.NArg() < 1 {
@@ -32,7 +33,7 @@ func main() {
 	}
 
 	for _, docxPath := range flag.Args() {
-		if err := swapImages(docxPath, *imagesDir); err != nil {
+		if err := swapImages(docxPath, *imagesDir, *slugFlag); err != nil {
 			log.Printf("ERROR %s: %v", docxPath, err)
 		} else {
 			log.Printf("OK %s", docxPath)
@@ -43,8 +44,11 @@ func main() {
 // reTagLine matches both [[IMG:filename.png|caption]] and [[R:filename.png]]
 var reTagLine = regexp.MustCompile(`\[\[(?:IMG:|R:)([^\]|]+?)(?:\|[^\]]*?)?\]\]`)
 
-func swapImages(docxPath, imagesDir string) error {
-	slug := strings.TrimSuffix(filepath.Base(docxPath), ".docx")
+func swapImages(docxPath, imagesDir, slugOverride string) error {
+	slug := slugOverride
+	if slug == "" {
+		slug = strings.TrimSuffix(filepath.Base(docxPath), ".docx")
+	}
 	slugImgDir := filepath.Join(imagesDir, slug)
 
 	if _, err := os.Stat(slugImgDir); os.IsNotExist(err) {

@@ -15,6 +15,11 @@ import (
 	"time"
 )
 
+type docxJob struct {
+	ps    *PipelineState
+	essay *EssayState
+}
+
 type Runner struct {
 	Config     *Config
 	Projects   []*PipelineState
@@ -23,15 +28,49 @@ type Runner struct {
 	BaseDir    string
 	ConfigPath string
 	CLIDryRun  bool
+	docxCh     chan docxJob
+	docxWg     sync.WaitGroup
 }
 
 func NewRunner(cfg *Config, baseDir string) *Runner {
-	return &Runner{
+	r := &Runner{
 		Config:  cfg,
 		Client:  &AnthropicClient{APIKey: cfg.API.AnthropicKey},
 		Log:     log.New(os.Stdout, "", 0),
 		BaseDir: baseDir,
+		docxCh:  make(chan docxJob, 200),
 	}
+	r.docxWg.Add(1)
+	go r.docxWorker()
+	return r
+}
+
+func (r *Runner) docxWorker() {
+	defer r.docxWg.Done()
+	for job := range r.docxCh {
+		r.Log.Printf("  [docx] %s: export starting", job.essay.Slug)
+		if err := r.exportEssay(job.ps, job.essay); err != nil {
+			r.Log.Printf("  [docx] ERROR export %s: %v", job.essay.Slug, err)
+			r.markError(job.ps, job.essay, StageExport, err)
+			continue
+		}
+
+		exportName := fmt.Sprintf("cChapter - 2026 - %s.%02d.%02d %s.docx",
+			job.essay.Book, job.essay.Part, job.essay.Order, job.essay.Title)
+		dstFile := filepath.Join(job.ps.BaseDir, "export", exportName)
+
+		r.Log.Printf("  [docx] %s: Word upgrade starting", job.essay.Slug)
+		if err := r.upgradeDocx(dstFile); err != nil {
+			r.Log.Printf("  [docx] WARNING: Word upgrade %s: %v", job.essay.Slug, err)
+		} else {
+			r.Log.Printf("  [docx] %s: complete", job.essay.Slug)
+		}
+	}
+}
+
+func (r *Runner) Shutdown() {
+	close(r.docxCh)
+	r.docxWg.Wait()
 }
 
 func (r *Runner) DiscoverProjects() error {
@@ -215,11 +254,13 @@ func (r *Runner) runDebugCycle(ctx context.Context, ps *PipelineState, essay *Es
 }
 
 func (r *Runner) processEssay(ctx context.Context, ps *PipelineState, essay *EssayState, targetStage Stage) error {
-	if targetStage == StageEject {
-		return r.ejectEssay(ps, essay)
-	}
 	if targetStage == StageExport {
-		return r.exportEssay(ps, essay)
+		if r.Config.Pipeline.Debug != "" {
+			return r.processDocxSync(ps, essay)
+		}
+		r.markInProgress(ps, essay, StageExport, "local")
+		r.docxCh <- docxJob{ps: ps, essay: essay}
+		return nil
 	}
 
 	prompt, model, err := r.buildPrompt(ps, essay, targetStage)
@@ -262,6 +303,213 @@ func (r *Runner) processEssay(ctx context.Context, ps *PipelineState, essay *Ess
 	ps.TotalCost += result.Cost
 	ps.SessionCost += result.Cost
 
+	return nil
+}
+
+func (r *Runner) processDocxSync(ps *PipelineState, essay *EssayState) error {
+	if err := r.exportEssay(ps, essay); err != nil {
+		return err
+	}
+	exportName := fmt.Sprintf("cChapter - 2026 - %s.%02d.%02d %s.docx",
+		essay.Book, essay.Part, essay.Order, essay.Title)
+	dstFile := filepath.Join(ps.BaseDir, "export", exportName)
+	if err := r.upgradeDocx(dstFile); err != nil {
+		r.Log.Printf("    WARNING: Word upgrade %s: %v", essay.Slug, err)
+	}
+	return nil
+}
+
+func (r *Runner) exportEssay(ps *PipelineState, essay *EssayState) error {
+	r.markInProgress(ps, essay, StageExport, "local")
+
+	mdFile := filepath.Join(ps.BaseDir, "draft2", essay.Slug+".md")
+	if _, err := os.Stat(mdFile); os.IsNotExist(err) {
+		mdFile = filepath.Join(ps.BaseDir, "illustrate", essay.Slug+".md")
+		if _, err := os.Stat(mdFile); os.IsNotExist(err) {
+			return fmt.Errorf("neither draft2 nor illustrate file found for %s", essay.Slug)
+		}
+	}
+
+	raw, err := os.ReadFile(mdFile)
+	if err != nil {
+		return fmt.Errorf("reading markdown: %w", err)
+	}
+	cleaned := sanitizeForDocx(string(raw))
+
+	tmpFile, err := os.CreateTemp("", "export-*.md")
+	if err != nil {
+		return fmt.Errorf("creating temp file: %w", err)
+	}
+	defer os.Remove(tmpFile.Name())
+	if _, err := tmpFile.WriteString(cleaned); err != nil {
+		tmpFile.Close()
+		return fmt.Errorf("writing temp file: %w", err)
+	}
+	tmpFile.Close()
+
+	exportDir := filepath.Join(ps.BaseDir, "export")
+	if err := os.MkdirAll(exportDir, 0755); err != nil {
+		return fmt.Errorf("creating export dir: %w", err)
+	}
+
+	home, _ := os.UserHomeDir()
+	templatePath := filepath.Join(home, ".works", "templates", "book-template.dotm")
+	exportName := fmt.Sprintf("cChapter - 2026 - %s.%02d.%02d %s.docx",
+		essay.Book, essay.Part, essay.Order, essay.Title)
+	outFile := filepath.Join(exportDir, exportName)
+
+	cmd := exec.Command("md2docx", templatePath, tmpFile.Name(), outFile)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("md2docx: %w %s", err, string(output))
+	}
+
+	dataDir := filepath.Join(r.BaseDir, "data")
+	renderCmd := exec.Command("imagerender", "--data", dataDir, "--slug", essay.Slug, ps.BaseDir)
+	if output, err := renderCmd.CombinedOutput(); err != nil {
+		r.Log.Printf("    WARNING: imagerender %s: %v %s", essay.Slug, err, string(output))
+	} else {
+		r.Log.Printf("    imagerender: %s", strings.TrimSpace(string(output)))
+	}
+
+	swapCmd := exec.Command("imageswap", "--slug", essay.Slug, "--images", filepath.Join(ps.BaseDir, "images"), outFile)
+	if output, err := swapCmd.CombinedOutput(); err != nil {
+		r.Log.Printf("    WARNING: imageswap %s: %v %s", essay.Slug, err, string(output))
+	}
+
+	r.Log.Printf("    exported → %s", exportName)
+
+	result := &APIResult{}
+	r.markComplete(ps, essay, StageExport, "local", result)
+	return nil
+}
+
+func (r *Runner) upgradeDocx(docxPath string) error {
+	absPath, err := filepath.Abs(docxPath)
+	if err != nil {
+		return fmt.Errorf("abs path: %w", err)
+	}
+
+	home, _ := os.UserHomeDir()
+	templatePath := filepath.Join(home, ".works", "templates", "book-template.dotm")
+
+	escaped := func(s string) string {
+		var out strings.Builder
+		for _, c := range s {
+			switch c {
+			case '"', '\u201C', '\u201D':
+				out.WriteString(`\"`)
+			case '\\':
+				out.WriteString(`\\`)
+			default:
+				out.WriteRune(c)
+			}
+		}
+		return out.String()
+	}
+
+	baseName := filepath.Base(docxPath)
+	title := baseName[:len(baseName)-len(filepath.Ext(baseName))]
+
+	script := `
+tell application "Microsoft Word"
+	launch
+end tell
+tell application "System Events"
+	set visible of process "Microsoft Word" to false
+end tell
+tell application "Microsoft Word"
+	open (POSIX file "` + escaped(templatePath) + `" as text)
+	set templateDoc to active document
+	set templatePageSetup to page setup of section 1 of templateDoc
+	set templatePageWidth to page width of templatePageSetup
+	set templatePageHeight to page height of templatePageSetup
+	set templateTopMargin to top margin of templatePageSetup
+	set templateBottomMargin to bottom margin of templatePageSetup
+	set templateLeftMargin to left margin of templatePageSetup
+	set templateRightMargin to right margin of templatePageSetup
+	set templateMirrorMargins to mirror margins of templatePageSetup
+	set templateGutter to gutter of templatePageSetup
+	close templateDoc saving no
+	open (POSIX file "` + escaped(absPath) + `" as text)
+	set theDoc to active document
+	set docPageSetup to page setup of section 1 of theDoc
+	set docPageWidth to page width of docPageSetup
+	set docPageHeight to page height of docPageSetup
+	set docIsLandscape to (docPageWidth > docPageHeight)
+	if docIsLandscape then
+		set tempWidth to templatePageWidth
+		set templatePageWidth to templatePageHeight
+		set templatePageHeight to tempWidth
+		set tempTopMargin to templateTopMargin
+		set tempBottomMargin to templateBottomMargin
+		set templateTopMargin to templateLeftMargin
+		set templateBottomMargin to templateRightMargin
+		set templateLeftMargin to tempTopMargin
+		set templateRightMargin to tempBottomMargin
+	end if
+	set widthRatio to templatePageWidth / docPageWidth
+	set heightRatio to templatePageHeight / docPageHeight
+	if widthRatio < heightRatio then
+		set scaleFactor to widthRatio
+	else
+		set scaleFactor to heightRatio
+	end if
+	set inlineShapeCount to count of inline shapes of theDoc
+	repeat with i from 1 to inlineShapeCount
+		try
+			set inlineShape to inline shape i of theDoc
+			set width of inlineShape to (width of inlineShape) * scaleFactor
+			set height of inlineShape to (height of inlineShape) * scaleFactor
+		end try
+	end repeat
+	set floatShapeCount to count of shapes of theDoc
+	repeat with i from 1 to floatShapeCount
+		try
+			set floatShape to shape i of theDoc
+			set width of floatShape to (width of floatShape) * scaleFactor
+			set height of floatShape to (height of floatShape) * scaleFactor
+		end try
+	end repeat
+	tell theDoc to copy styles from template template (POSIX file "` + escaped(templatePath) + `" as text)
+	set page width of docPageSetup to templatePageWidth
+	set page height of docPageSetup to templatePageHeight
+	set mirror margins of docPageSetup to templateMirrorMargins
+	set gutter of docPageSetup to templateGutter
+	set top margin of docPageSetup to templateTopMargin
+	set bottom margin of docPageSetup to templateBottomMargin
+	set left margin of docPageSetup to templateLeftMargin
+	set right margin of docPageSetup to templateRightMargin
+	set title of properties of theDoc to "` + escaped(title) + `"
+	save theDoc
+	close theDoc
+	quit
+end tell
+`
+
+	tmpFile, err := os.CreateTemp("", "upgrade-*.scpt")
+	if err != nil {
+		return fmt.Errorf("creating temp script: %w", err)
+	}
+	scriptPath := tmpFile.Name()
+	if _, err := tmpFile.WriteString(script); err != nil {
+		tmpFile.Close()
+		os.Remove(scriptPath)
+		return fmt.Errorf("writing script: %w", err)
+	}
+	tmpFile.Close()
+	defer os.Remove(scriptPath)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "osascript", scriptPath)
+	output, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		return fmt.Errorf("Word upgrade timed out")
+	}
+	if err != nil {
+		return fmt.Errorf("osascript: %w: %s", err, string(output))
+	}
 	return nil
 }
 

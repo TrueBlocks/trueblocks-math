@@ -24,12 +24,11 @@ const (
 	StageFactcheck
 	StageIllustrate
 	StageDraft2
-	StageEject
 	StageExport
 	StageDone
 )
 
-var stageNames = []string{"ideas", "research", "outline", "draft", "factcheck", "illustrate", "draft2", "eject", "export"}
+var stageNames = []string{"ideas", "research", "outline", "draft", "factcheck", "illustrate", "draft2", "export"}
 
 func (s Stage) String() string {
 	if int(s) < len(stageNames) {
@@ -120,7 +119,7 @@ type PipelineState struct {
 }
 
 func NewPipelineState(project, baseDir string) *PipelineState {
-	for _, name := range append(stageNames, "images", "draft3") {
+	for _, name := range append(stageNames, "images") {
 		os.MkdirAll(filepath.Join(baseDir, name), 0755)
 	}
 	return &PipelineState{

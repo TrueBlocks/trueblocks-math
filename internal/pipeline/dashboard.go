@@ -169,7 +169,7 @@ func (d *Dashboard) Start() error {
 	mux.HandleFunc("/api/step", d.handleStep)
 	mux.HandleFunc("/api/essays", d.handleEssays)
 	mux.HandleFunc("/api/open", d.handleOpen)
-	mux.HandleFunc("/api/eject", d.handleEject)
+
 	mux.HandleFunc("/api/open-docx", d.handleOpenDocx)
 	mux.HandleFunc("/api/disk-stats", d.handleDiskStats)
 	mux.HandleFunc("/api/logs", d.handleLogs)
@@ -327,109 +327,6 @@ func (d *Dashboard) handleOpen(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, `{"ok":true,"path":"%s"}`, mdFile)
 }
 
-func (d *Dashboard) handleEject(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "POST only", http.StatusMethodNotAllowed)
-		return
-	}
-
-	project := r.URL.Query().Get("project")
-	slug := r.URL.Query().Get("slug")
-	if project == "" || slug == "" {
-		http.Error(w, "project and slug required", http.StatusBadRequest)
-		return
-	}
-
-	var ps *PipelineState
-	for _, p := range d.Runner.Projects {
-		if p.Project == project {
-			ps = p
-			break
-		}
-	}
-	if ps == nil {
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"ok":false,"error":"project not found"}`)
-		return
-	}
-
-	essay := ps.Essays[slug]
-	if essay == nil {
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"ok":false,"error":"essay not found"}`)
-		return
-	}
-
-	mdFile := filepath.Join(ps.BaseDir, "draft2", slug+".md")
-	if _, err := os.Stat(mdFile); os.IsNotExist(err) {
-		mdFile = filepath.Join(ps.BaseDir, "illustrate", slug+".md")
-		if _, err := os.Stat(mdFile); os.IsNotExist(err) {
-			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprintf(w, `{"ok":false,"error":"neither draft2 nor illustrate file found"}`)
-			return
-		}
-	}
-
-	raw, err := os.ReadFile(mdFile)
-	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"ok":false,"error":"reading draft2: %s"}`, err)
-		return
-	}
-	cleaned := sanitizeForDocx(string(raw))
-
-	tmpFile, err := os.CreateTemp("", "eject-*.md")
-	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"ok":false,"error":"creating temp file: %s"}`, err)
-		return
-	}
-	defer os.Remove(tmpFile.Name())
-	if _, err := tmpFile.WriteString(cleaned); err != nil {
-		tmpFile.Close()
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"ok":false,"error":"writing temp file: %s"}`, err)
-		return
-	}
-	tmpFile.Close()
-
-	outDir := filepath.Join(ps.BaseDir, "draft3")
-	if err := os.MkdirAll(outDir, 0755); err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"ok":false,"error":"creating draft3 dir: %s"}`, err)
-		return
-	}
-
-	home, _ := os.UserHomeDir()
-	templatePath := filepath.Join(home, ".works", "templates", "book-template.dotm")
-	outFile := filepath.Join(outDir, slug+".docx")
-
-	cmd := exec.Command("md2docx", templatePath, tmpFile.Name(), outFile)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"ok":false,"error":"md2docx: %s %s"}`, err, string(output))
-		return
-	}
-
-	dataDir := filepath.Join(d.Runner.BaseDir, "data")
-	renderCmd := exec.Command("imagerender", "--data", dataDir, "--slug", slug, ps.BaseDir)
-	if output, err := renderCmd.CombinedOutput(); err != nil {
-		d.Runner.Log.Printf("[%s] WARNING: imagerender %s: %v %s", project, slug, err, string(output))
-	} else {
-		d.Runner.Log.Printf("[%s] imagerender %s: %s", project, slug, strings.TrimSpace(string(output)))
-	}
-
-	swapCmd := exec.Command("imageswap", "--images", filepath.Join(ps.BaseDir, "images"), outFile)
-	if output, err := swapCmd.CombinedOutput(); err != nil {
-		d.Runner.Log.Printf("[%s] WARNING: imageswap %s: %v %s", project, slug, err, string(output))
-	}
-
-	d.Runner.Log.Printf("[%s] Ejected %s → %s", project, slug, outFile)
-
-	w.Header().Set("Content-Type", "application/json")
-	fmt.Fprintf(w, `{"ok":true,"path":"%s"}`, outFile)
-}
-
 func (d *Dashboard) handleOpenDocx(w http.ResponseWriter, r *http.Request) {
 	project := r.URL.Query().Get("project")
 	slug := r.URL.Query().Get("slug")
@@ -450,7 +347,15 @@ func (d *Dashboard) handleOpenDocx(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	docxFile := filepath.Join(ps.BaseDir, "draft3", slug+".docx")
+	essay := ps.Essays[slug]
+	if essay == nil {
+		http.Error(w, "essay not found", http.StatusNotFound)
+		return
+	}
+
+	exportName := fmt.Sprintf("cChapter - 2026 - %s.%02d.%02d %s.docx",
+		essay.Book, essay.Part, essay.Order, essay.Title)
+	docxFile := filepath.Join(ps.BaseDir, "export", exportName)
 	if err := exec.Command("open", docxFile).Run(); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -541,7 +446,7 @@ func (d *Dashboard) handleSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d *Dashboard) handleDiskStats(w http.ResponseWriter, r *http.Request) {
-	stages := []string{"ideas", "research", "outline", "draft", "factcheck", "illustrate", "draft2", "draft3"}
+	stages := []string{"ideas", "research", "outline", "draft", "factcheck", "illustrate", "draft2", "export"}
 	counts := make(map[string]int, len(stages))
 
 	for _, ps := range d.Runner.Projects {
@@ -586,7 +491,7 @@ type essayJSON struct {
 	Status    string `json:"status"`
 	Arc       string `json:"arc,omitempty"`
 	Error     string `json:"error,omitempty"`
-	Ejected   string `json:"ejected"`
+	HasDocx   bool   `json:"has_docx"`
 	WordCount int    `json:"word_count,omitempty"`
 	ReadMins  int    `json:"read_mins,omitempty"`
 }
@@ -610,19 +515,14 @@ func (d *Dashboard) handleEssays(w http.ResponseWriter, r *http.Request) {
 			if meta, ok := e.Meta[e.CurrentStage]; ok && meta.Error != "" {
 				errMsg = meta.Error
 			}
-			ejected := ""
+			hasDocx := false
 			var wordCount, readMins int
 			if e.IsDone() {
-				docxPath := filepath.Join(ps.BaseDir, "draft3", e.Slug+".docx")
-				md2Path := filepath.Join(ps.BaseDir, "draft2", e.Slug+".md")
-				illPath := filepath.Join(ps.BaseDir, "illustrate", e.Slug+".md")
-				if di, err := os.Stat(docxPath); err == nil {
-					ejected = "current"
-					if mi, err := os.Stat(md2Path); err == nil && mi.ModTime().After(di.ModTime()) {
-						ejected = "stale"
-					} else if mi, err := os.Stat(illPath); err == nil && mi.ModTime().After(di.ModTime()) {
-						ejected = "stale"
-					}
+				exportName := fmt.Sprintf("cChapter - 2026 - %s.%02d.%02d %s.docx",
+					e.Book, e.Part, e.Order, e.Title)
+				exportPath := filepath.Join(ps.BaseDir, "export", exportName)
+				if _, err := os.Stat(exportPath); err == nil {
+					hasDocx = true
 				}
 			}
 			for _, s := range []string{"draft2", "illustrate", "draft", "outline"} {
@@ -646,7 +546,7 @@ func (d *Dashboard) handleEssays(w http.ResponseWriter, r *http.Request) {
 				Status:    status,
 				Arc:       e.Arc,
 				Error:     errMsg,
-				Ejected:   ejected,
+				HasDocx:   hasDocx,
 				WordCount: wordCount,
 				ReadMins:  readMins,
 			})
@@ -654,7 +554,7 @@ func (d *Dashboard) handleEssays(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sort.Slice(essays, func(i, j int) bool {
-		ri, rj := stageRank(essays[i].Stage, essays[i].Ejected), stageRank(essays[j].Stage, essays[j].Ejected)
+		ri, rj := stageRank(essays[i].Stage), stageRank(essays[j].Stage)
 		if ri != rj {
 			return ri < rj
 		}
@@ -671,7 +571,7 @@ func (d *Dashboard) handleEssays(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(essays)
 }
 
-func stageRank(stage, ejected string) int {
+func stageRank(stage string) int {
 	switch stage {
 	case "research":
 		return 1
@@ -681,17 +581,16 @@ func stageRank(stage, ejected string) int {
 		return 3
 	case "factcheck":
 		return 4
-	case "draft2":
-		return 5
 	case "illustrate":
+		return 5
+	case "draft2":
 		return 6
-	case "done":
-		if ejected == "current" {
-			return 9
-		}
+	case "export":
 		return 7
-	default:
+	case "done":
 		return 8
+	default:
+		return 9
 	}
 }
 
@@ -777,6 +676,7 @@ const dashboardHTML = `<!DOCTYPE html>
   .stage-draft { background: #2e7d32; }
   .stage-factcheck { background: #e65100; }
   .stage-draft2 { background: #00838f; }
+  .stage-export { background: #4527a0; }
   .stage-done { background: #2e7d32; }
   .status-pending { color: #888; }
   .status-done { color: #4caf50; }
@@ -786,10 +686,9 @@ const dashboardHTML = `<!DOCTYPE html>
   .cost { color: #ff9800; font-weight: bold; }
   .retry-banner { background: #e65100; color: white; padding: 10px 16px; border-radius: 6px;
                   margin-bottom: 16px; font-weight: bold; font-size: 0.95rem; }
-  .eject-btn { background: #6a1b9a; color: white; border: none; padding: 3px 10px; border-radius: 3px;
-               font-size: 0.75rem; cursor: pointer; font-weight: bold; }
-  .eject-btn:hover { background: #8e24aa; }
-  .eject-btn:disabled { background: #555; cursor: default; }
+  .open-btn { background: #2e7d32; color: white; border: none; padding: 3px 10px; border-radius: 3px;
+              font-size: 0.75rem; cursor: pointer; font-weight: bold; }
+  .open-btn:hover { background: #388e3c; }
 </style>
 </head>
 <body>
@@ -831,7 +730,7 @@ const dashboardHTML = `<!DOCTYPE html>
     <div class="card"><div class="number" id="dk-draft">-</div><div class="label">Draft</div></div>
     <div class="card"><div class="number" id="dk-factcheck">-</div><div class="label">Factcheck</div></div>
     <div class="card"><div class="number" id="dk-draft2">-</div><div class="label">Draft 2</div></div>
-    <div class="card"><div class="number" id="dk-draft3">-</div><div class="label">Draft 3</div></div>
+    <div class="card"><div class="number" id="dk-export">-</div><div class="label">Export</div></div>
     <div class="card"><div class="number cost" id="dk-cost">-</div><div class="label">Total Cost</div></div>
     <div class="card"><div class="number">&nbsp;</div><div class="label">&nbsp;</div></div>
   </div>
@@ -988,11 +887,7 @@ async function refresh() {
     '<td>' + (e.arc ? esc(e.arc) : '') + '</td>' +
     '<td><span class="stage-badge stage-' + e.stage + '">' + e.stage + '</span></td>' +
     '<td class="status-' + e.status + '">' + e.status + (e.error ? ' <span title="' + esc(e.error) + '" style="cursor:help">\u26a0</span>' : '') + '</td>' +
-    '<td>' + (function() {
-      if (e.stage !== 'done') return '';
-      if (e.ejected === 'current') return '<button class="eject-btn" style="background:#2e7d32" onclick="openDocx(\x27' + encodeURIComponent(e.project) + '\x27,\x27' + encodeURIComponent(e.slug) + '\x27)">Open</button>';
-      return '<button class="eject-btn" onclick="doEject(\x27' + encodeURIComponent(e.project) + '\x27,\x27' + encodeURIComponent(e.slug) + '\x27,this)">' + (e.ejected === 'stale' ? 'Re-eject' : 'Eject') + '</button>';
-    })() + '</td>' +
+    '<td>' + (e.has_docx ? '<button class="open-btn" onclick="openDocx(\x27' + encodeURIComponent(e.project) + '\x27,\x27' + encodeURIComponent(e.slug) + '\x27)">Open</button>' : '') + '</td>' +
     '</tr>';
   }).join('');
 }
@@ -1000,27 +895,6 @@ function esc(s) { var d = document.createElement('div'); d.textContent = s; retu
 function filterProject(p) { activeProject = p; refresh(); }
 async function openFolder(project, slug) {
   await fetch('/api/open?project=' + project + '&slug=' + slug);
-}
-async function doEject(project, slug, btn) {
-  btn.disabled = true; btn.textContent = 'Ejecting...';
-  try {
-    var resp = await fetch('/api/eject?project=' + project + '&slug=' + slug, { method: 'POST' });
-    var data = await resp.json();
-    if (data.ok) {
-      btn.textContent = 'Done';
-      btn.style.background = '#4caf50';
-      setTimeout(function() { refresh(); }, 1500);
-    } else {
-      btn.textContent = 'Error';
-      btn.style.background = '#f44336';
-      btn.title = data.error || 'unknown error';
-      setTimeout(function() { btn.disabled = false; btn.textContent = 'Eject'; btn.style.background = ''; btn.title = ''; }, 3000);
-    }
-  } catch(e) {
-    btn.textContent = 'Error';
-    btn.style.background = '#f44336';
-    setTimeout(function() { btn.disabled = false; btn.textContent = 'Eject'; btn.style.background = ''; btn.title = ''; }, 3000);
-  }
 }
 function openDocx(project, slug) {
   fetch('/api/open-docx?project=' + project + '&slug=' + slug);
@@ -1067,7 +941,7 @@ async function refreshDiskStats() {
   document.getElementById('dk-draft').textContent = c.draft || 0;
   document.getElementById('dk-factcheck').textContent = c.factcheck || 0;
   document.getElementById('dk-draft2').textContent = c.draft2 || 0;
-  document.getElementById('dk-draft3').textContent = c.draft3 || 0;
+  document.getElementById('dk-export').textContent = c.export || 0;
   document.getElementById('dk-cost').textContent = '$' + d.total_cost.toFixed(2);
 }
 refresh();

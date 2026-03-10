@@ -158,6 +158,7 @@ func main() {
 		for cycleRunning.Load() {
 			time.Sleep(100 * time.Millisecond)
 		}
+		runner.Shutdown()
 		printFinalSummary(runner)
 		return
 	}
@@ -177,6 +178,7 @@ func main() {
 			for cycleRunning.Load() {
 				time.Sleep(100 * time.Millisecond)
 			}
+			runner.Shutdown()
 			printFinalSummary(runner)
 			return
 
