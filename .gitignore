@@ -1,3 +1,5 @@
+*.pdf
+*.mermaid
 scaffold
 imagerender
 .DS_Store

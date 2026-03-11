@@ -45,6 +45,52 @@ func NewRunner(cfg *Config, baseDir string) *Runner {
 	return r
 }
 
+func exportFilename(essay *EssayState) string {
+	switch essay.Type {
+	case "section":
+		return fmt.Sprintf("cSection - 2026 - %s.%02d.00 %s.docx",
+			essay.Book, essay.Part, essay.Title)
+	case "introduction":
+		return fmt.Sprintf("cChapter - 2026 - %s.00.00 %s.docx",
+			essay.Book, essay.Title)
+	default:
+		return fmt.Sprintf("cChapter - 2026 - %s.%02d.%02d %s.docx",
+			essay.Book, essay.Part, essay.Order, essay.Title)
+	}
+}
+
+func shouldSkipStage(itemType string, stage Stage) bool {
+	switch itemType {
+	case "section":
+		return stage != StageDraft2 && stage != StageExport
+	case "introduction":
+		return stage == StageResearch || stage == StageFactcheck || stage == StageIllustrate
+	}
+	return false
+}
+
+func (r *Runner) autoSkipStage(ps *PipelineState, essay *EssayState, targetStage Stage) error {
+	prevStage := targetStage - 1
+	if prevStage < StageIdeas {
+		prevStage = StageIdeas
+	}
+
+	srcPath := filepath.Join(ps.BaseDir, prevStage.Dir(), essay.Slug+".md")
+	content, err := os.ReadFile(srcPath)
+	if err != nil {
+		return fmt.Errorf("auto-skip reading %s: %w", srcPath, err)
+	}
+
+	if err := ps.WriteContent(targetStage, essay.Slug, string(content)); err != nil {
+		return fmt.Errorf("auto-skip writing content: %w", err)
+	}
+
+	result := &APIResult{}
+	r.markComplete(ps, essay, targetStage, "skip", result)
+	r.Log.Printf("    [skip] %s: %s (auto-skipped for %s)", essay.Slug, targetStage, essay.Type)
+	return nil
+}
+
 func (r *Runner) docxWorker() {
 	defer r.docxWg.Done()
 	for job := range r.docxCh {
@@ -55,9 +101,7 @@ func (r *Runner) docxWorker() {
 			continue
 		}
 
-		exportName := fmt.Sprintf("cChapter - 2026 - %s.%02d.%02d %s.docx",
-			job.essay.Book, job.essay.Part, job.essay.Order, job.essay.Title)
-		dstFile := filepath.Join(job.ps.BaseDir, "export", exportName)
+		dstFile := filepath.Join(job.ps.BaseDir, "export", exportFilename(job.essay))
 
 		r.Log.Printf("  [docx] %s: Word upgrade starting", job.essay.Slug)
 		if err := r.upgradeDocx(dstFile); err != nil {
@@ -254,6 +298,10 @@ func (r *Runner) runDebugCycle(ctx context.Context, ps *PipelineState, essay *Es
 }
 
 func (r *Runner) processEssay(ctx context.Context, ps *PipelineState, essay *EssayState, targetStage Stage) error {
+	if shouldSkipStage(essay.Type, targetStage) {
+		return r.autoSkipStage(ps, essay, targetStage)
+	}
+
 	if targetStage == StageExport {
 		if r.Config.Pipeline.Debug != "" {
 			return r.processDocxSync(ps, essay)
@@ -310,9 +358,7 @@ func (r *Runner) processDocxSync(ps *PipelineState, essay *EssayState) error {
 	if err := r.exportEssay(ps, essay); err != nil {
 		return err
 	}
-	exportName := fmt.Sprintf("cChapter - 2026 - %s.%02d.%02d %s.docx",
-		essay.Book, essay.Part, essay.Order, essay.Title)
-	dstFile := filepath.Join(ps.BaseDir, "export", exportName)
+	dstFile := filepath.Join(ps.BaseDir, "export", exportFilename(essay))
 	if err := r.upgradeDocx(dstFile); err != nil {
 		r.Log.Printf("    WARNING: Word upgrade %s: %v", essay.Slug, err)
 	}
@@ -354,8 +400,7 @@ func (r *Runner) exportEssay(ps *PipelineState, essay *EssayState) error {
 
 	home, _ := os.UserHomeDir()
 	templatePath := filepath.Join(home, ".works", "templates", "book-template.dotm")
-	exportName := fmt.Sprintf("cChapter - 2026 - %s.%02d.%02d %s.docx",
-		essay.Book, essay.Part, essay.Order, essay.Title)
+	exportName := exportFilename(essay)
 	outFile := filepath.Join(exportDir, exportName)
 
 	cmd := exec.Command("md2docx", templatePath, tmpFile.Name(), outFile)
@@ -363,17 +408,19 @@ func (r *Runner) exportEssay(ps *PipelineState, essay *EssayState) error {
 		return fmt.Errorf("md2docx: %w %s", err, string(output))
 	}
 
-	dataDir := filepath.Join(r.BaseDir, "data")
-	renderCmd := exec.Command("imagerender", "--data", dataDir, "--slug", essay.Slug, ps.BaseDir)
-	if output, err := renderCmd.CombinedOutput(); err != nil {
-		r.Log.Printf("    WARNING: imagerender %s: %v %s", essay.Slug, err, string(output))
-	} else {
-		r.Log.Printf("    imagerender: %s", strings.TrimSpace(string(output)))
-	}
+	if strings.Contains(cleaned, "[[IMG:") {
+		dataDir := filepath.Join(r.BaseDir, "data")
+		renderCmd := exec.Command("imagerender", "--data", dataDir, "--slug", essay.Slug, ps.BaseDir)
+		if output, err := renderCmd.CombinedOutput(); err != nil {
+			r.Log.Printf("    WARNING: imagerender %s: %v %s", essay.Slug, err, string(output))
+		} else {
+			r.Log.Printf("    imagerender: %s", strings.TrimSpace(string(output)))
+		}
 
-	swapCmd := exec.Command("imageswap", "--slug", essay.Slug, "--images", filepath.Join(ps.BaseDir, "images"), outFile)
-	if output, err := swapCmd.CombinedOutput(); err != nil {
-		r.Log.Printf("    WARNING: imageswap %s: %v %s", essay.Slug, err, string(output))
+		swapCmd := exec.Command("imageswap", "--slug", essay.Slug, "--images", filepath.Join(ps.BaseDir, "images"), outFile)
+		if output, err := swapCmd.CombinedOutput(); err != nil {
+			r.Log.Printf("    WARNING: imageswap %s: %v %s", essay.Slug, err, string(output))
+		}
 	}
 
 	r.Log.Printf("    exported → %s", exportName)
@@ -543,17 +590,27 @@ func (r *Runner) buildPrompt(ps *PipelineState, essay *EssayState, targetStage S
 
 	case StageOutline:
 		model = r.Config.Models.Outline
-		research := readContent(StageResearch)
-		arc := RandomArc()
-		essay.Arc = arc.Name
-		prompt = OutlinePrompt(ideaMeta.Title, research, targetWords, arc)
+		if essay.Type == "introduction" {
+			ideaContent := readContent(StageIdeas)
+			prompt = IntroOutlinePrompt(ideaMeta.Title, ideaContent)
+		} else {
+			research := readContent(StageResearch)
+			arc, _ := ArcByName(essay.Arc)
+			prompt = OutlinePrompt(ideaMeta.Title, research, targetWords, arc)
+		}
 
 	case StageDraft:
 		model = r.Config.Models.Draft
-		outline := readContent(StageOutline)
-		research := readContent(StageResearch)
-		arc, _ := ArcByName(essay.Arc)
-		prompt = DraftPrompt(ideaMeta.Title, outline, research, targetWords, arc)
+		if essay.Type == "introduction" {
+			outline := readContent(StageOutline)
+			ideaContent := readContent(StageIdeas)
+			prompt = IntroDraftPrompt(ideaMeta.Title, outline, ideaContent)
+		} else {
+			outline := readContent(StageOutline)
+			research := readContent(StageResearch)
+			arc, _ := ArcByName(essay.Arc)
+			prompt = DraftPrompt(ideaMeta.Title, outline, research, targetWords, arc)
+		}
 
 	case StageFactcheck:
 		model = r.Config.Models.Factcheck
@@ -563,11 +620,19 @@ func (r *Runner) buildPrompt(ps *PipelineState, essay *EssayState, targetStage S
 
 	case StageDraft2:
 		model = r.Config.Models.Draft2
-		draft := readContent(StageDraft)
-		factcheck := readContent(StageFactcheck)
-		illustrate := readContent(StageIllustrate)
-		arc, _ := ArcByName(essay.Arc)
-		prompt = Draft2Prompt(ideaMeta.Title, draft, factcheck, illustrate, targetWords, arc)
+		if essay.Type == "section" {
+			ideaContent := readContent(StageIdeas)
+			prompt = SectionDraft2Prompt(ideaMeta.Title, ideaContent, ideaMeta.PartTitle)
+		} else if essay.Type == "introduction" {
+			draft := readContent(StageDraft)
+			prompt = IntroDraft2Prompt(ideaMeta.Title, draft)
+		} else {
+			draft := readContent(StageDraft)
+			factcheck := readContent(StageFactcheck)
+			illustrate := readContent(StageIllustrate)
+			arc, _ := ArcByName(essay.Arc)
+			prompt = Draft2Prompt(ideaMeta.Title, draft, factcheck, illustrate, targetWords, arc)
+		}
 
 	case StageIllustrate:
 		model = r.Config.Models.Illustrate
@@ -603,6 +668,7 @@ func (r *Runner) markInProgress(ps *PipelineState, essay *EssayState, stage Stag
 	meta := &EssayMeta{
 		Slug:      essay.Slug,
 		Title:     essay.Title,
+		Type:      essay.Type,
 		Book:      essay.Book,
 		Part:      essay.Part,
 		PartTitle: essay.PartTitle,
@@ -610,6 +676,7 @@ func (r *Runner) markInProgress(ps *PipelineState, essay *EssayState, stage Stag
 		Status:    "in-progress",
 		Model:     model,
 		Arc:       essay.Arc,
+		Ending:    essay.Ending,
 		Created:   essay.Meta[StageIdeas].Created,
 		Started:   nowString(),
 	}
@@ -625,6 +692,7 @@ func (r *Runner) markComplete(ps *PipelineState, essay *EssayState, stage Stage,
 	meta := &EssayMeta{
 		Slug:      essay.Slug,
 		Title:     essay.Title,
+		Type:      essay.Type,
 		Book:      essay.Book,
 		Part:      essay.Part,
 		PartTitle: essay.PartTitle,
@@ -632,6 +700,7 @@ func (r *Runner) markComplete(ps *PipelineState, essay *EssayState, stage Stage,
 		Status:    "final",
 		Model:     model,
 		Arc:       essay.Arc,
+		Ending:    essay.Ending,
 		Created:   essay.Meta[StageIdeas].Created,
 		Started:   nowString(),
 		Completed: nowString(),
@@ -651,6 +720,7 @@ func (r *Runner) markError(ps *PipelineState, essay *EssayState, stage Stage, er
 	meta := &EssayMeta{
 		Slug:      essay.Slug,
 		Title:     essay.Title,
+		Type:      essay.Type,
 		Book:      essay.Book,
 		Part:      essay.Part,
 		PartTitle: essay.PartTitle,
@@ -658,6 +728,7 @@ func (r *Runner) markError(ps *PipelineState, essay *EssayState, stage Stage, er
 		Status:    "error",
 		Model:     "",
 		Arc:       essay.Arc,
+		Ending:    essay.Ending,
 		Created:   essay.Meta[StageIdeas].Created,
 		Started:   nowString(),
 		Error:     err.Error(),

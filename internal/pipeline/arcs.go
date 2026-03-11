@@ -1,20 +1,16 @@
 package pipeline
 
-import randv2 "math/rand/v2"
-
 type NarrativeArc struct {
 	Name        string
 	Label       string
-	Weight      int
 	OutlineHint string
 	DraftHint   string
 }
 
 var narrativeArcs = []NarrativeArc{
 	{
-		Name:   "slow-build",
-		Label:  "The Slow Build",
-		Weight: 2,
+		Name:  "slow-build",
+		Label: "The Slow Build",
 		OutlineHint: `NARRATIVE ARC: "The Slow Build"
 
 Structure this essay as a gradual revelation. Open with a quiet everyday scene — something the reader has
@@ -36,9 +32,8 @@ not jump to a new topic. The mathematical reveal should feel earned, not announc
 to tip your hand early. The reader should feel the pieces clicking together, not be told they're about to.`,
 	},
 	{
-		Name:   "cold-open-mystery",
-		Label:  "The Cold Open Mystery",
-		Weight: 2,
+		Name:  "cold-open-mystery",
+		Label: "The Cold Open Mystery",
 		OutlineHint: `NARRATIVE ARC: "The Cold Open Mystery"
 
 Structure this essay as a detective story. Open cold — drop a baffling fact, an unsolved puzzle, or a
@@ -60,9 +55,8 @@ following leads: examine explanations, eliminate them with evidence, build towar
 The mathematics should feel like cracking the case, not a textbook aside. Maintain tension throughout.`,
 	},
 	{
-		Name:   "paradox",
-		Label:  "The Paradox",
-		Weight: 2,
+		Name:  "paradox",
+		Label: "The Paradox",
 		OutlineHint: `NARRATIVE ARC: "The Paradox"
 
 Structure this essay around a central paradox or impossibility. Open by stating something that sounds
@@ -84,9 +78,8 @@ at a time, each one making the paradox slightly less impossible. The resolution 
 an intellectual level-up, not just "oh, I see." The reader's intuition should be permanently updated.`,
 	},
 	{
-		Name:   "demolition",
-		Label:  "The Demolition",
-		Weight: 2,
+		Name:  "demolition",
+		Label: "The Demolition",
 		OutlineHint: `NARRATIVE ARC: "The Demolition"
 
 Structure this essay as a controlled demolition of a widely-believed explanation. Open by confidently
@@ -108,9 +101,8 @@ feel like removing a Jenga block. When the old explanation collapses, build the 
 The correct answer should feel more satisfying than the myth it replaced.`,
 	},
 	{
-		Name:   "dual-timeline",
-		Label:  "The Dual Timeline",
-		Weight: 2,
+		Name:  "dual-timeline",
+		Label: "The Dual Timeline",
 		OutlineHint: `NARRATIVE ARC: "The Dual Timeline"
 
 Structure this essay by interleaving two threads that converge. Thread A is the historical discovery
@@ -134,9 +126,8 @@ The mathematical sections should be crisp and illuminating. The two threads shou
 racing toward each other and finally meeting at the end.`,
 	},
 	{
-		Name:   "zoom",
-		Label:  "The Zoom",
-		Weight: 2,
+		Name:  "zoom",
+		Label: "The Zoom",
 		OutlineHint: `NARRATIVE ARC: "The Zoom"
 
 Structure this essay as a journey through scales — either zooming in (from cosmos to atom) or zooming
@@ -159,9 +150,8 @@ the thrill of the same principle appearing again and again at wildly different s
 sensory details at each level to keep the journey grounded.`,
 	},
 	{
-		Name:   "argument",
-		Label:  "The Argument",
-		Weight: 2,
+		Name:  "argument",
+		Label: "The Argument",
 		OutlineHint: `NARRATIVE ARC: "The Argument"
 
 Structure this essay as a genuine intellectual debate. Present two (or more) competing explanations
@@ -183,9 +173,8 @@ evidence. Write the competing sections with equal conviction. The resolution sho
 a jury reaching a verdict after careful deliberation, not a teacher revealing the "right answer."`,
 	},
 	{
-		Name:   "catalog-of-wonders",
-		Label:  "The Catalog of Wonders",
-		Weight: 2,
+		Name:  "catalog-of-wonders",
+		Label: "The Catalog of Wonders",
 		OutlineHint: `NARRATIVE ARC: "The Catalog of Wonders"
 
 Structure this essay as an escalating series of variations on a single mathematical theme. No single
@@ -208,90 +197,62 @@ them, growing clearer with each example. The reader should feel the escalation �
 they should be actively looking for the next occurrence themselves.`,
 	},
 	{
-		Name:   "letter-to-a-friend",
-		Label:  "The Letter to a Friend",
-		Weight: 1,
-		OutlineHint: `NARRATIVE ARC: "The Letter to a Friend"
+		Name:  "confession",
+		Label: "The Confession",
+		OutlineHint: `NARRATIVE ARC: "The Confession"
 
-Structure this essay as if writing to a specific curious person who asked you a question. Open with
-"You asked me once why..." or a similar direct address. The entire essay is a personal explanation —
-intimate, patient, building from what the friend already knows. This creates natural permission to
-explain from scratch while feeling warm rather than pedagogical. The mathematics arrives as something
-you're sharing, not teaching.
+Structure this essay as a personal intellectual confession. Open with what you — or everyone — used
+to believe about this topic. Explain WHY it made sense. Build the reader's confidence in the wrong
+answer so they feel it too. Then introduce the evidence that forced a change of mind. The correction
+should feel like a shared journey from comfortable ignorance to uncomfortable truth. The reader goes
+through the same intellectual update the author did.
 
 Key structural beats:
-1. The question — what the friend asked, in their words
+1. The confession — "I used to think X" or "Everyone says X" — stated warmly, not as a setup
+2. Why the wrong answer makes sense — take it seriously, show its logic
+3. The first crack — the observation or experiment that didn't fit
+4. The turning point — the moment the old belief became untenable
+5. The new understanding — what replaced it, and why it's more interesting
+6. What it felt like to change — a brief, honest note on intellectual humility`,
+		DraftHint: `This essay uses "The Confession" arc. Write in a warm "we" voice — the reader should feel
+they're changing their mind alongside you, not being corrected. Start by making the wrong belief
+sympathetic and logical. The evidence against it should accumulate naturally, not feel like a trap.
+The new understanding should feel like a gift, not a scolding.`,
+	},
+	{
+		Name:  "letter",
+		Label: "The Letter",
+		OutlineHint: `NARRATIVE ARC: "The Letter"
+
+Structure this essay as if writing to a specific person — a curious friend, a historical figure,
+or the reader directly. Open with "You asked me once why..." or a similar direct address. The entire
+essay is a personal explanation — intimate, patient, building from what the recipient already knows.
+This creates natural permission to explain from scratch while feeling warm rather than pedagogical.
+The mathematics arrives as something you're sharing, not teaching.
+
+Key structural beats:
+1. The question — what the recipient asked, in their words
 2. "Here's the thing..." — your first attempt to explain, starting simple
 3. Going deeper — you realize the simple answer isn't enough, and dig into the math
 4. The connection — show why this matters beyond the original question
 5. The surprise — something you discovered while preparing this answer
-6. The sign-off — return to the friend, leaving them with a new way to see it`,
-		DraftHint: `This essay uses "The Letter to a Friend" arc. Write as if addressing a specific curious person.
+6. The sign-off — return to the recipient, leaving them with a new way to see it`,
+		DraftHint: `This essay uses "The Letter" arc. Write as if addressing a specific curious person.
 Use "you" naturally and often. The tone should be intimate and generous — you're sharing something
 you find fascinating, not proving you're smart. Let the explanation build patiently from what the
-friend already knows. The mathematics should feel like a gift you're unwrapping together.`,
+recipient already knows. The mathematics should feel like a gift you're unwrapping together.`,
 	},
 	{
-		Name:   "time-lapse",
-		Label:  "The Time-Lapse",
-		Weight: 1,
-		OutlineHint: `NARRATIVE ARC: "The Time-Lapse"
-
-Structure this essay as a compressed journey through time. Start at T=0 — the Big Bang, the first
-cell division, the moment a raindrop hits a puddle, the instant a string is plucked — and fast-forward
-through time, pausing at key moments when the mathematics becomes visible. Each "pause" is a section.
-The essay should feel like a nature documentary's time-lapse: vast spans compressed into vivid
-snapshots, with the mathematics as the narrator explaining what's happening at each stop.
-
-Key structural beats:
-1. T=0 — the initiating event, described vividly and specifically
-2. First pause — seconds/minutes later, the first mathematical pattern emerges
-3. Second pause — hours/days/years later, the pattern has evolved or scaled
-4. Third pause — a much longer timescale, the same mathematics in a new form
-5. The long view — the final timescale, showing where this all leads
-6. Now — return to the present moment; the reader sees the whole arc at once`,
-		DraftHint: `This essay uses "The Time-Lapse" arc. Write as a journey through time, with each section
-anchored to a specific moment. Use concrete timestamps or time references to ground each pause.
-The reader should feel time accelerating between sections. At each stop, show something vivid
-and specific, then reveal the mathematics at work. The cumulative effect should be awe at how
-much unfolds from a single starting moment.`,
-	},
-	{
-		Name:   "wrong-turn",
-		Label:  "The Wrong Turn",
-		Weight: 1,
-		OutlineHint: `NARRATIVE ARC: "The Wrong Turn"
-
-Structure this essay so the reader follows a plausible but incorrect line of reasoning — and discovers
-the error themselves. Unlike "The Demolition" (which debunks a myth others believe), this arc has
-the READER doing the reasoning, building confidence in a wrong answer, and then hitting a wall.
-The essay then backtracks and follows the correct path, which the reader now appreciates far more
-because they've felt the failure firsthand. The wrong turn must be genuinely tempting, not a straw man.
-
-Key structural beats:
-1. The setup — present a question that invites a natural first approach
-2. Following the wrong path — walk through the reasoning step by step, building confidence
-3. The wall — show where this approach breaks, with a specific counterexample or contradiction
-4. "Where did we go wrong?" — identify the exact moment the reasoning went astray
-5. The right path — now follow the correct approach, which the reader appreciates deeply
-6. The lesson — what this teaches about mathematical thinking itself`,
-		DraftHint: `This essay uses "The Wrong Turn" arc. Lead the reader down the wrong path deliberately —
-make it feel natural and logical. Build their confidence before pulling the rug out. The moment
-of failure should be a genuine "wait, that can't be right" realization, not a lecture about what's
-wrong. When you backtrack to the correct approach, the reader should feel relief and deeper
-understanding precisely because they experienced the failure themselves.`,
-	},
-	{
-		Name:   "expedition",
-		Label:  "The Expedition",
-		Weight: 1,
-		OutlineHint: `NARRATIVE ARC: "The Expedition"
+		Name:  "walk",
+		Label: "The Walk",
+		OutlineHint: `NARRATIVE ARC: "The Walk"
 
 Structure this essay as a physical journey through a real place. Walk through a forest, ride a train,
-cross a bridge, wander a city. The mathematics emerges from what you encounter along the way — each
-location reveals a new mathematical layer. The reader is literally moving through the essay. Sensory
-details (sounds, textures, light) ground the mathematics in physical experience. The journey has a
-destination, and arriving there brings the mathematical theme into focus.
+cross a bridge, wander a city, or sit in a concert hall. The mathematics emerges from what you
+encounter along the way — each location reveals a new mathematical layer. The reader is literally
+moving through the essay. Sensory details (sounds, textures, light) ground the mathematics in
+physical experience. The journey has a destination, and arriving there brings the mathematical
+theme into focus.
 
 Key structural beats:
 1. Setting out — describe where you are and what you see; the journey begins
@@ -300,27 +261,107 @@ Key structural beats:
 4. The unexpected — something surprising along the way connects to a different branch of math
 5. Arrival — reaching the destination, where the full mathematical picture comes together
 6. Looking back — from the destination, the whole journey makes new sense`,
-		DraftHint: `This essay uses "The Expedition" arc. Write as a journey through a real physical place.
+		DraftHint: `This essay uses "The Walk" arc. Write as a journey through a real physical place.
 Use sensory details — what you see, hear, feel — to ground every mathematical idea in a location.
 The reader should feel like they're walking alongside you. Each stop along the way should reveal
 mathematics naturally, not as a digression but as something the place itself is showing you.
 The journey should have momentum — the reader should want to see what's around the next corner.`,
 	},
-}
+	{
+		Name:  "countdown",
+		Label: "The Countdown",
+		OutlineHint: `NARRATIVE ARC: "The Countdown"
 
-func RandomArc() NarrativeArc {
-	totalWeight := 0
-	for _, arc := range narrativeArcs {
-		totalWeight += arc.Weight
-	}
-	pick := randv2.IntN(totalWeight)
-	for _, arc := range narrativeArcs {
-		pick -= arc.Weight
-		if pick < 0 {
-			return arc
-		}
-	}
-	return narrativeArcs[0]
+Structure this essay as an inverted pyramid. Start with the answer — the beautiful, surprising
+mathematical fact. State it plainly. Then ask "but why?" and peel back one layer. Ask "but why?"
+again and peel back another. Each layer is deeper, more fundamental, closer to mathematical bedrock.
+The essay drills down rather than building up. The reader starts with satisfaction and ends with
+vertigo — the deeper you go, the more mysterious the foundations become.
+
+Key structural beats:
+1. The answer — stated up front, clearly and surprisingly
+2. First "but why?" — the immediate explanation, which raises a new question
+3. Second "but why?" — a deeper layer, now in more fundamental territory
+4. Third "but why?" — approaching bedrock, mathematics as axioms or deep structure
+5. The bottom — the most fundamental level you can reach (which may itself be unresolved)
+6. Looking up — from the bottom, show the reader how much structure rests on so little`,
+		DraftHint: `This essay uses "The Countdown" arc. Open with the answer — don't make the reader wait.
+Each section goes one level deeper. The reader should feel they're descending through layers,
+each one more fundamental than the last. Use "but why does THAT work?" as a natural transition.
+By the end, the reader should feel a mix of understanding and awe at how deep the foundations go.`,
+	},
+	{
+		Name:  "recipe",
+		Label: "The Recipe",
+		OutlineHint: `NARRATIVE ARC: "The Recipe"
+
+Structure this essay as a set of instructions the reader could actually follow. Each step is
+concrete, physical, and actionable — shuffle a deck, cut a cake, fold a crane, draw a tessellation.
+Embedded in each step is a mathematical principle that the reader discovers by doing. The recipe
+format creates intimacy and agency: the reader is a participant, not a spectator. The mathematics
+emerges from the instructions naturally, like finding a theorem inside a cooking recipe.
+
+Key structural beats:
+1. The invitation — "Here's what you'll need" or "Try this" — draw the reader in
+2. Step 1 — a concrete action with the first mathematical seed
+3. Step 2 — building on the first, the math becomes visible
+4. Step 3 — the pattern crystallizes; the reader sees the principle
+5. The reveal — name the mathematics and show why the recipe works
+6. Variations — other "recipes" that use the same principle (brief, tantalizing)`,
+		DraftHint: `This essay uses "The Recipe" arc. Write as actual instructions — imperative, clear, physical.
+"Take a deck of cards. Shuffle once..." The mathematics should emerge from the instructions
+naturally, not as an interruption. The reader should feel agency — they could do this right now.
+When the mathematical principle is finally named, it should feel like recognizing something
+they already understand from having followed the steps.`,
+	},
+	{
+		Name:  "debate",
+		Label: "The Debate",
+		OutlineHint: `NARRATIVE ARC: "The Debate"
+
+Structure this essay as a dramatized argument between two historical figures or intellectual
+traditions, separated by decades or centuries. Each side gets to present their case with passion
+and evidence. The reader is the judge. Give both figures historical details, motivations, and
+human moments — they should feel like real people with real stakes. The mathematical truth
+emerges from the clash of ideas, and the reader sees how intellectual conflict drives discovery.
+
+Key structural beats:
+1. The dispute — introduce the two sides and what's at stake
+2. Figure A's case — presented with historical context and human detail
+3. Figure B's response — equally compelling, from a different era or perspective
+4. The evidence — what ultimately distinguished the positions
+5. The verdict — which view prevailed (or how they were reconciled)
+6. The legacy — what the debate itself taught us about mathematical truth`,
+		DraftHint: `This essay uses "The Debate" arc. Write the two sides with equal passion and conviction.
+Give each figure historical details, motivations, personality — they should feel alive on the page.
+The reader should genuinely weigh both arguments before seeing the resolution. If the debate
+continues today, say so honestly. Historical accuracy matters — get the dates, quotes, and
+intellectual positions right.`,
+	},
+	{
+		Name:  "inheritance",
+		Label: "The Inheritance",
+		OutlineHint: `NARRATIVE ARC: "The Inheritance"
+
+Structure this essay as a relay race through intellectual history. A mathematical concept is passed
+from one thinker to the next across generations — each inheritor transforms, extends, or
+misunderstands it. The essay follows the idea, not any single person. Each handoff is a section.
+The concept grows and changes with each generation until it becomes something the originator
+would barely recognize. The reader feels time passing and knowledge accumulating.
+
+Key structural beats:
+1. The origin — who first had this idea, in what context, and what it meant to them
+2. First handoff — the next generation receives it and transforms it
+3. Second handoff — further evolution, perhaps in a different field entirely
+4. The detour — a misunderstanding or dead end that eventually proved productive
+5. Modern form — what the concept looks like today, fully evolved
+6. The thread — looking back, show the single thread connecting all the transformations`,
+		DraftHint: `This essay uses "The Inheritance" arc. Write as a chain of intellectual handoffs.
+Each section introduces a new mind receiving and transforming the idea. Use names, dates, and
+human details to anchor each handoff. The mathematics should evolve visibly with each generation.
+The reader should feel the passage of time and the accumulation of understanding. By the end,
+the modern form should feel both surprising and inevitable.`,
+	},
 }
 
 func ArcByName(name string) (NarrativeArc, bool) {

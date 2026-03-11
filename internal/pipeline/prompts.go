@@ -345,3 +345,129 @@ OUTPUT: The complete revised essay in markdown with image tags preserved. Do NOT
 
 FORMAT: Markdown with section headers. Use **bold** for emphasis, *italics* for book/paper titles and foreign words. Use $...$ for inline math and $$...$$ for display math. Target approximately %d words (~%d minute read).`, title, targetWords, targetWords/265, arcDirective, draftContent, factcheckContent, illustrateContent, targetWords, targetWords/265)
 }
+
+func SectionDraft2Prompt(title, ideaContent, partTitle string) string {
+	return fmt.Sprintf(`You are writing a section divider page for a popular mathematics book.
+
+SECTION: "%s"
+PART TITLE: %s
+
+IDEA FILE:
+%s
+
+Write a very short introductory paragraph for this section divider — 2 to 3 sentences maximum.
+The paragraph sets up what this part of the book explores, in a warm, inviting voice. It does not
+summarize the essays — it invites the reader in. Think of it as a breath between chapters, not an
+announcement.
+
+After the paragraph, include this image tag on its own line:
+
+[[IMG:section-placeholder.png|Insert cartoon here]]
+
+REQUIREMENTS:
+- Maximum 3 sentences
+- Warm, conversational tone — consistent with the book's character
+- Do NOT list essays or topics explicitly
+- Do NOT use phrases like "In this section..." or "The following chapters..."
+- The reader should feel curiosity, not obligation
+
+OUTPUT: A markdown document with:
+1. A level-1 heading with the part title
+2. The 2-3 sentence introductory paragraph
+3. The image tag
+
+Example format:
+# What Your Kitchen Knows
+
+Your kitchen is a physics laboratory with terrible safety protocols.
+Every morning, your cereal, your coffee, and your shower conspire to
+demonstrate graduate-level mathematics — without your permission.
+
+[[IMG:section-placeholder.png|Insert cartoon here]]`, title, partTitle, ideaContent)
+}
+
+func IntroOutlinePrompt(title, ideaContent string) string {
+	return fmt.Sprintf(`You are outlining a book introduction for a popular mathematics book series.
+
+BOOK INTRODUCTION: "%s"
+
+IDEA FILE:
+%s
+
+Create a short outline (4-5 beats) for a 400-500 word book introduction. This is the reader's
+first encounter with this book's voice and territory.
+
+REQUIREMENTS:
+- Open with a concrete, sensory image (not an abstraction)
+- Build toward the book's governing idea without naming it outright
+- End with an invitation, not a table of contents
+- Do NOT list chapters, parts, or essay titles
+- Do NOT use phrases like "In this book..." or "The reader will learn..."
+
+For each beat, provide:
+- A one-line description of what happens
+- The emotional note it strikes
+- How it connects to the next beat
+
+The introduction should feel like the opening of a conversation, not the preface of a textbook.
+
+FORMAT: Markdown outline with clear beat numbers.`, title, ideaContent)
+}
+
+func IntroDraftPrompt(title, outlineContent, ideaContent string) string {
+	return fmt.Sprintf(`You are writing a book introduction for a popular mathematics book series.
+
+BOOK INTRODUCTION: "%s"
+
+OUTLINE:
+%s
+
+IDEA FILE:
+%s
+
+Write the complete book introduction from the outline.
+
+REQUIREMENTS:
+- 400-500 words maximum (1.5-2 pages)
+- Match the book's character as described in the idea file
+- No images, no equations, no section headers (except the title)
+- Hint at the journey ahead without mapping it
+- The reader should feel curiosity, not obligation
+- No meta-commentary about the book's structure
+- Do NOT reference parts by name or number
+- Do NOT use phrases like "Welcome to..." or "In the pages that follow..."
+
+VOICE:
+- Warm, clear, conversational — like the opening of a letter from a knowledgeable friend
+- Specific and sensory — ground abstract ideas in physical experience
+- Confident but not arrogant — share wonder, don't perform expertise
+
+OUTPUT: A markdown document with a level-1 heading and the introduction prose. No section headers within the text.
+
+FORMAT: Markdown. Use *italics* for emphasis where appropriate. No bold, no math notation.`, title, outlineContent, ideaContent)
+}
+
+func IntroDraft2Prompt(title, draftContent string) string {
+	return fmt.Sprintf(`You are polishing a book introduction for a popular mathematics book series.
+
+BOOK INTRODUCTION: "%s"
+
+DRAFT:
+%s
+
+This is a polish pass. Tighten the language, cut anything that sounds like a sales pitch or a
+course syllabus. The introduction should read like the opening of a conversation, not the
+preface of a textbook.
+
+REQUIREMENTS:
+- Keep within 400-500 words
+- Preserve the opening sensory image — it sets the tone
+- Cut any sentence that tells the reader what to expect rather than making them curious
+- Remove any phrase that sounds like marketing or academic boilerplate
+- Ensure every sentence earns its place — if it doesn't deepen the invitation, cut it
+- Maintain the book's character and voice from the draft
+
+OUTPUT: The complete polished introduction in markdown. No changelog or notes.
+
+FORMAT: Markdown with a level-1 heading. No section headers within the text. Use *italics* for emphasis.`, title, draftContent)
+}

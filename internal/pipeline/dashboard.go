@@ -109,6 +109,7 @@ type Dashboard struct {
 	cycleStarted  time.Time
 	retryMessage  string
 	LogBuf        *LogBuffer
+	paused        bool
 }
 
 func NewDashboard(runner *Runner, port, cycleInterval int, configPath string, logBuf *LogBuffer) *Dashboard {
@@ -120,6 +121,7 @@ func NewDashboard(runner *Runner, port, cycleInterval int, configPath string, lo
 		stepCh:        make(chan struct{}, 1),
 		intervalCh:    make(chan int, 1),
 		LogBuf:        logBuf,
+		paused:        true,
 	}
 }
 
@@ -156,6 +158,12 @@ func (d *Dashboard) IntervalChannel() <-chan int {
 	return d.intervalCh
 }
 
+func (d *Dashboard) IsPaused() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.paused
+}
+
 func (d *Dashboard) SetLastLog(actions []string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -173,6 +181,7 @@ func (d *Dashboard) Start() error {
 	mux.HandleFunc("/api/open-docx", d.handleOpenDocx)
 	mux.HandleFunc("/api/disk-stats", d.handleDiskStats)
 	mux.HandleFunc("/api/logs", d.handleLogs)
+	mux.HandleFunc("/api/pause", d.handlePause)
 	mux.HandleFunc("/api/settings", d.handleSettings)
 
 	addr := fmt.Sprintf("127.0.0.1:%d", d.Port)
@@ -193,6 +202,7 @@ func (d *Dashboard) handleIndex(w http.ResponseWriter, r *http.Request) {
 type statusResponse struct {
 	DryRun        bool                    `json:"dry_run"`
 	Verbose       bool                    `json:"verbose"`
+	Paused        bool                    `json:"paused"`
 	Cycle         int                     `json:"cycle"`
 	TotalCost     float64                 `json:"total_cost"`
 	CycleInterval int                     `json:"cycle_interval"`
@@ -221,6 +231,7 @@ func (d *Dashboard) handleStatus(w http.ResponseWriter, r *http.Request) {
 	running := d.cycleRunning
 	started := d.cycleStarted
 	retryMsg := d.retryMessage
+	paused := d.paused
 	d.mu.Unlock()
 
 	secsLeft := int(time.Until(nextAt).Seconds())
@@ -255,6 +266,7 @@ func (d *Dashboard) handleStatus(w http.ResponseWriter, r *http.Request) {
 	resp := statusResponse{
 		DryRun:        d.Runner.Config.Pipeline.DryRun,
 		Verbose:       d.Runner.Config.Pipeline.Verbose,
+		Paused:        paused,
 		Cycle:         d.Runner.TotalCycles(),
 		TotalCost:     d.Runner.TotalCost(),
 		CycleInterval: d.CycleInterval,
@@ -353,8 +365,7 @@ func (d *Dashboard) handleOpenDocx(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	exportName := fmt.Sprintf("cChapter - 2026 - %s.%02d.%02d %s.docx",
-		essay.Book, essay.Part, essay.Order, essay.Title)
+	exportName := exportFilename(essay)
 	docxFile := filepath.Join(ps.BaseDir, "export", exportName)
 	if err := exec.Command("open", docxFile).Run(); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -399,6 +410,24 @@ func (d *Dashboard) handleLogs(w http.ResponseWriter, r *http.Request) {
 		Version int64      `json:"version"`
 		Entries []LogEntry `json:"entries"`
 	}{Version: ver, Entries: entries})
+}
+
+func (d *Dashboard) handlePause(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	d.mu.Lock()
+	d.paused = !d.paused
+	nowPaused := d.paused
+	d.mu.Unlock()
+	if nowPaused {
+		d.Runner.Log.Println("Pipeline PAUSED")
+	} else {
+		d.Runner.Log.Println("Pipeline RESUMED")
+	}
+	w.Header().Set("Content-Type", "application/json")
+	fmt.Fprintf(w, `{"ok":true,"paused":%v}`, nowPaused)
 }
 
 func (d *Dashboard) handleSettings(w http.ResponseWriter, r *http.Request) {
@@ -483,6 +512,7 @@ type essayJSON struct {
 	Project   string `json:"project"`
 	Slug      string `json:"slug"`
 	Title     string `json:"title"`
+	Type      string `json:"type"`
 	Book      string `json:"book"`
 	Part      int    `json:"part"`
 	PartTitle string `json:"part_title"`
@@ -518,8 +548,7 @@ func (d *Dashboard) handleEssays(w http.ResponseWriter, r *http.Request) {
 			hasDocx := false
 			var wordCount, readMins int
 			if e.IsDone() {
-				exportName := fmt.Sprintf("cChapter - 2026 - %s.%02d.%02d %s.docx",
-					e.Book, e.Part, e.Order, e.Title)
+				exportName := exportFilename(e)
 				exportPath := filepath.Join(ps.BaseDir, "export", exportName)
 				if _, err := os.Stat(exportPath); err == nil {
 					hasDocx = true
@@ -538,6 +567,7 @@ func (d *Dashboard) handleEssays(w http.ResponseWriter, r *http.Request) {
 				Project:   ps.Project,
 				Slug:      e.Slug,
 				Title:     e.Title,
+				Type:      e.Type,
 				Book:      e.Book,
 				Part:      e.Part,
 				PartTitle: e.PartTitle,
@@ -708,6 +738,7 @@ const dashboardHTML = `<!DOCTYPE html>
       <div class="countdown-label" id="countdownLabel">Next cycle</div>
     </div>
     <button class="btn" id="stepBtn" onclick="doStep()">Run Now</button>
+    <button class="btn" id="pauseBtn" onclick="togglePause()" style="background:#ff9800">Resume</button>
   </div>
 
   <div class="grid">
@@ -739,7 +770,7 @@ const dashboardHTML = `<!DOCTYPE html>
 
   <table>
     <thead>
-      <tr><th>Project</th><th>#</th><th>Length</th><th>Title</th><th>Arc</th><th>Stage</th><th>Status</th><th></th></tr>
+      <tr><th>Project</th><th>#</th><th>Type</th><th>Title</th><th>Stage</th><th>Arc</th><th>Length</th><th>Status</th><th></th></tr>
     </thead>
     <tbody id="essayTable"></tbody>
   </table>
@@ -769,7 +800,7 @@ const dashboardHTML = `<!DOCTYPE html>
 </div>
 
 <script>
-let cycleInterval = 15, secondsLeft = 15, activeProject = '', isRunning = false;
+let cycleInterval = 15, secondsLeft = 15, activeProject = '', isRunning = false, isPaused = true;
 let verbose = false;
 const circ = 2 * Math.PI * 22;
 
@@ -783,6 +814,9 @@ function updateRing() {
   if (isRunning) {
     ring.style.stroke = '#ff9800';
     label.textContent = 'Running';
+  } else if (isPaused) {
+    ring.style.stroke = '#888';
+    label.textContent = 'Paused';
   } else {
     ring.style.stroke = '#e94560';
     label.textContent = 'Next cycle';
@@ -831,6 +865,15 @@ async function refresh() {
   cycleInterval = s.cycle_interval || 15;
   secondsLeft = s.seconds_left;
   isRunning = s.cycle_running || false;
+  isPaused = s.paused || false;
+  var pauseBtn = document.getElementById('pauseBtn');
+  if (isPaused) {
+    pauseBtn.textContent = 'Resume';
+    pauseBtn.style.background = '#ff9800';
+  } else {
+    pauseBtn.textContent = 'Pause';
+    pauseBtn.style.background = '#e94560';
+  }
   if (!document.getElementById('intervalInput').matches(':focus')) {
     document.getElementById('intervalInput').value = cycleInterval;
   }
@@ -882,10 +925,11 @@ async function refresh() {
     return '<tr>' +
     '<td>' + esc(e.project) + '</td>' +
     '<td>' + idStr + '</td>' +
-    '<td>' + lenStr + '</td>' +
+    '<td>' + esc(e.type || 'essay') + '</td>' +
     '<td><a href="#" onclick="openFolder(\x27' + encodeURIComponent(e.project) + '\x27,\x27' + encodeURIComponent(e.slug) + '\x27);return false" style="color:#e94560;text-decoration:none">' + esc(e.title) + '</a></td>' +
-    '<td>' + (e.arc ? esc(e.arc) : '') + '</td>' +
     '<td><span class="stage-badge stage-' + e.stage + '">' + e.stage + '</span></td>' +
+    '<td>' + (e.arc ? esc(e.arc) : '-') + '</td>' +
+    '<td>' + lenStr + '</td>' +
     '<td class="status-' + e.status + '">' + e.status + (e.error ? ' <span title="' + esc(e.error) + '" style="cursor:help">\u26a0</span>' : '') + '</td>' +
     '<td>' + (e.has_docx ? '<button class="open-btn" onclick="openDocx(\x27' + encodeURIComponent(e.project) + '\x27,\x27' + encodeURIComponent(e.slug) + '\x27)">Open</button>' : '') + '</td>' +
     '</tr>';
@@ -904,6 +948,10 @@ async function doStep() {
   btn.disabled = true; btn.textContent = 'Running...';
   await fetch('/api/step', { method: 'POST' });
   setTimeout(async function() { await refresh(); btn.disabled = false; btn.textContent = 'Run Now'; }, 2000);
+}
+async function togglePause() {
+  await fetch('/api/pause', { method: 'POST' });
+  await refresh();
 }
 function toggleVerbose() {
   verbose = document.getElementById('verboseToggle').checked;
@@ -947,7 +995,7 @@ async function refreshDiskStats() {
 refresh();
 refreshLogs();
 refreshDiskStats();
-setInterval(refresh, 3000);
+setInterval(refresh, 1000);
 setInterval(refreshLogs, 500);
 setInterval(refreshDiskStats, 10000);
 </script>

@@ -204,6 +204,18 @@ func (ps *PipelineState) LoadFromDisk() error {
 		}
 	}
 
+	exportDir := filepath.Join(ps.BaseDir, "export")
+	for _, essay := range ps.Essays {
+		if essay.CurrentStage == StageExport && essay.Status == "final" {
+			continue
+		}
+		docxPath := filepath.Join(exportDir, exportFilename(essay))
+		if _, err := os.Stat(docxPath); err == nil {
+			essay.CurrentStage = StageExport
+			essay.Status = "final"
+		}
+	}
+
 	return nil
 }
 

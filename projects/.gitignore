@@ -1,3 +1,6 @@
+*.png
+*.R
+*.txt
 *.md
 *.yaml
 *.docx

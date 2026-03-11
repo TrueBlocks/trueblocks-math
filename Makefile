@@ -1,6 +1,6 @@
 INSTALL_DIR = $(HOME)/source
 
-BINARIES = imagerender imageswap pipeline
+BINARIES = imagerender imageswap pipeline scaffold
 
 .PHONY: build clean
 

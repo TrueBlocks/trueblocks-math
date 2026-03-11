@@ -103,25 +103,19 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	var cycleRunning atomic.Bool
-
 	runCycle := func() {
-		if !cycleRunning.CompareAndSwap(false, true) {
-			runner.Log.Println("Cycle already running, skipping")
-			return
-		}
 		dash.SetCycleRunning()
 		actions, err := runner.RunCycle(ctx)
 		if err != nil && ctx.Err() == nil {
 			runner.Log.Printf("Cycle error: %v", err)
 		}
-		dash.SetLastLog(actions)
-		for _, a := range actions {
-			runner.Log.Println(a)
+		if len(actions) > 0 {
+			dash.SetLastLog(actions)
+			for _, a := range actions {
+				runner.Log.Println(a)
+			}
 		}
 		dash.SetCycleFinished()
-		dash.SetNextCycleAt(time.Now().Add(time.Duration(dash.CycleInterval) * time.Second))
-		cycleRunning.Store(false)
 	}
 
 	if *once && cfg.Pipeline.Debug == "" {
@@ -155,18 +149,15 @@ func main() {
 		runCycle()
 		runner.Log.Printf("DEBUG complete — dashboard still running at http://127.0.0.1:%d", cfg.Dashboard.Port)
 		<-ctx.Done()
-		for cycleRunning.Load() {
-			time.Sleep(100 * time.Millisecond)
-		}
 		runner.Shutdown()
 		printFinalSummary(runner)
 		return
 	}
 
 	runner.Log.Printf("Auto-cycling every %d seconds (step from dashboard to run immediately)", interval)
+	runner.Log.Println("Pipeline starts PAUSED — click Resume in the dashboard to begin")
 
 	dash.SetNextCycleAt(time.Now().Add(time.Duration(interval) * time.Second))
-	go runCycle()
 
 	ticker := time.NewTicker(time.Duration(interval) * time.Second)
 	defer ticker.Stop()
@@ -175,9 +166,6 @@ func main() {
 		select {
 		case <-ctx.Done():
 			ticker.Stop()
-			for cycleRunning.Load() {
-				time.Sleep(100 * time.Millisecond)
-			}
 			runner.Shutdown()
 			printFinalSummary(runner)
 			return
@@ -189,10 +177,19 @@ func main() {
 			runner.Log.Printf("Cycle interval changed to %d seconds", interval)
 
 		case <-dash.StepChannel():
+			if dash.IsPaused() {
+				runner.Log.Println("Step ignored — pipeline is paused")
+				continue
+			}
 			ticker.Reset(time.Duration(interval) * time.Second)
+			dash.SetNextCycleAt(time.Now().Add(time.Duration(interval) * time.Second))
 			go runCycle()
 
 		case <-ticker.C:
+			dash.SetNextCycleAt(time.Now().Add(time.Duration(interval) * time.Second))
+			if dash.IsPaused() {
+				continue
+			}
 			go runCycle()
 		}
 	}
