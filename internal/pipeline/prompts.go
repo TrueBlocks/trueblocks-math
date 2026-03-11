@@ -2,7 +2,11 @@ package pipeline
 
 import "fmt"
 
-func ResearchPrompt(title, hook, hiddenMath string) string {
+func ResearchPrompt(title, hook, hiddenMath, setting string) string {
+	settingDirective := ""
+	if setting != "" {
+		settingDirective = fmt.Sprintf("\nSETTING CONTEXT: %s\nWhen choosing examples, historical context, and cultural references, ground them in this setting where natural. Don't force it — but let the setting inform the kind of examples you reach for.\n", setting)
+	}
 	return fmt.Sprintf(`You are a research assistant preparing material for an Asimov-style popular mathematics essay.
 
 ESSAY: "%s"
@@ -43,10 +47,20 @@ Your task is to produce a thorough research brief that the author will use to wr
    - Prefer original sources and authoritative textbooks
    - Flag any claims that are contested or uncertain
 
-FORMAT: Use markdown. Be precise but not dry. The author writes in an engaging, conversational style — give them material they can work with. Target 2000-3000 words.`, title, hook, hiddenMath)
+FORMAT: Use markdown. Be precise but not dry. The author writes in an engaging, conversational style — give them material they can work with. Target 2000-3000 words.%s`, title, hook, hiddenMath, settingDirective)
 }
 
-func OutlinePrompt(title, researchContent string, targetWords int, arc NarrativeArc) string {
+func OutlinePrompt(title, researchContent string, targetWords int, arc NarrativeArc, structure StructureHint, entry EntryHint, mathVis MathVisHint) string {
+	extraDirectives := ""
+	if structure.OutlineHint != "" {
+		extraDirectives += "\n" + structure.OutlineHint + "\n"
+	}
+	if entry.DraftHint != "" {
+		extraDirectives += "\n" + entry.DraftHint + "\n"
+	}
+	if mathVis.OutlineHint != "" {
+		extraDirectives += "\n" + mathVis.OutlineHint + "\n"
+	}
 	return fmt.Sprintf(`You are structuring an Asimov-style popular mathematics essay.
 
 ESSAY: "%s"
@@ -75,13 +89,28 @@ Also include:
    - Like explaining something fascinating to a bright friend over coffee
    - NEVER condescending. Assume the reader is intelligent but not specialized.
 
-FORMAT: Use markdown with clear section headers. Be specific — don't say "discuss the math," say WHICH math and HOW.`, title, targetWords, targetWords/265, researchContent, arc.OutlineHint)
+FORMAT: Use markdown with clear section headers. Be specific — don't say "discuss the math," say WHICH math and HOW.%s`, title, targetWords, targetWords/265, researchContent, arc.OutlineHint, extraDirectives)
 }
 
-func DraftPrompt(title, outlineContent, researchContent string, targetWords int, arc NarrativeArc) string {
+func DraftPrompt(title, outlineContent, researchContent string, targetWords int, arc NarrativeArc, structure StructureHint, entry EntryHint, register RegisterHint, setting string, mathVis MathVisHint) string {
 	arcDirective := ""
 	if arc.DraftHint != "" {
 		arcDirective = fmt.Sprintf("\nNARRATIVE ARC: %s\n%s\n", arc.Label, arc.DraftHint)
+	}
+	if structure.DraftHint != "" {
+		arcDirective += "\n" + structure.DraftHint + "\n"
+	}
+	if entry.DraftHint != "" {
+		arcDirective += "\n" + entry.DraftHint + "\n"
+	}
+	if register.DraftHint != "" {
+		arcDirective += "\n" + register.DraftHint + "\n"
+	}
+	if setting != "" {
+		arcDirective += fmt.Sprintf("\nSETTING: %s\nGround the essay in this setting — the place, the time, the sensory world. Let the setting shape the examples and the imagery. Don't force it, but let it inform every choice.\n", setting)
+	}
+	if mathVis.DraftHint != "" {
+		arcDirective += "\n" + mathVis.DraftHint + "\n"
 	}
 	return fmt.Sprintf(`You are drafting an Asimov-style popular mathematics essay.
 
@@ -157,12 +186,19 @@ Check the draft against the research and your own knowledge. For each issue foun
 FORMAT: Markdown. Be specific and quote the problematic passages directly. If everything checks out, say so — don't invent problems.`, title, draftContent, researchContent)
 }
 
-func IllustratePrompt(title, draftContent, factcheckContent, slug string) string {
+func IllustratePrompt(title, draftContent, factcheckContent, slug, setting string, mathVis MathVisHint) string {
+	contextDirectives := ""
+	if setting != "" {
+		contextDirectives += fmt.Sprintf("\nSETTING: %s — let this inform the visual style and imagery choices.\n", setting)
+	}
+	if mathVis.DraftHint != "" {
+		contextDirectives += "\n" + mathVis.DraftHint + "\nChoose image types and density accordingly.\n"
+	}
 	return fmt.Sprintf(`You are an illustration specialist for an Asimov-style popular mathematics essay collection.
 
 ESSAY: "%s"
 SLUG: %s
-
+%s
 DRAFT:
 %s
 
@@ -293,16 +329,19 @@ For AI sources, write a detailed image generation prompt that:
 - AI prompts must be detailed, specific, and describe the exact scene, style, and mathematical content
 - Vary image types and placement across essays — do not be predictable
 - Choose image placement for maximum explanatory impact
-`, title, slug, draftContent, factcheckContent,
+`, title, slug, contextDirectives, draftContent, factcheckContent,
 		"[[IMG:img_01_descriptive_name.png|Caption describing what the image shows]]",
 		"---IMAGE-SOURCES---",
 		"---IMAGE:img_01_descriptive_name.png|method:mermaid---\n(mermaid source code here)\n---END-IMAGE---\n\n---IMAGE:img_02_descriptive_name.png|method:r---\n(R script source code here)\n---END-IMAGE---\n\n---IMAGE:img_03_descriptive_name.png|method:ai---\n(detailed image generation prompt here)\n---END-IMAGE---")
 }
 
-func Draft2Prompt(title, draftContent, factcheckContent, illustrateContent string, targetWords int, arc NarrativeArc) string {
+func Draft2Prompt(title, draftContent, factcheckContent, illustrateContent string, targetWords int, arc NarrativeArc, register RegisterHint) string {
 	arcDirective := ""
 	if arc.DraftHint != "" {
 		arcDirective = fmt.Sprintf("\nNARRATIVE ARC: %s\n%s\n", arc.Label, arc.DraftHint)
+	}
+	if register.DraftHint != "" {
+		arcDirective += "\n" + register.DraftHint + "\nEnforce this register throughout the revision. If the original draft drifts into a different tone, correct it.\n"
 	}
 	return fmt.Sprintf(`You are revising an Asimov-style popular mathematics essay based on a fact-check report and illustration plan.
 

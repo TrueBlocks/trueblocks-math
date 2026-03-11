@@ -32,16 +32,17 @@ type ModelsConfig struct {
 }
 
 type PipelineConfig struct {
-	MaxPerCycle   int     `yaml:"max_per_cycle"`
-	NewPerCycle   int     `yaml:"new_per_cycle"`
-	DryRun        bool    `yaml:"dry_run"`
-	CycleInterval int     `yaml:"cycle_interval"`
-	APITimeout    int     `yaml:"api_timeout"`
-	Concurrency   int     `yaml:"concurrency"`
-	Verbose       bool    `yaml:"verbose"`
-	ReadMean      float64 `yaml:"read_mean"`
-	ReadSpread    float64 `yaml:"read_spread"`
-	Debug         string  `yaml:"debug"`
+	MaxPerCycle       int     `yaml:"max_per_cycle"`
+	NewPerCycle       int     `yaml:"new_per_cycle"`
+	DryRun            bool    `yaml:"dry_run"`
+	CycleInterval     int     `yaml:"cycle_interval"`
+	APITimeout        int     `yaml:"api_timeout"`
+	Concurrency       int     `yaml:"concurrency"`
+	Verbose           bool    `yaml:"verbose"`
+	ReadMean          float64 `yaml:"read_mean"`
+	ReadSpread        float64 `yaml:"read_spread"`
+	Debug             string  `yaml:"debug"`
+	SkipRevertConfirm bool    `yaml:"skip_revert_confirm"`
 }
 
 type DashboardConfig struct {
@@ -99,6 +100,7 @@ func SaveConfig(path string, cfg *Config) error {
 	lines := strings.Split(string(raw), "\n")
 	set := func(key, val string) {
 		re := regexp.MustCompile(`(?i)^(\s*` + regexp.QuoteMeta(key) + `\s*:\s*)(\S.*?)(\s*#.*)?$`)
+		found := false
 		for i, line := range lines {
 			if m := re.FindStringSubmatchIndex(line); m != nil {
 				prefix := line[m[2]:m[3]]
@@ -107,6 +109,17 @@ func SaveConfig(path string, cfg *Config) error {
 					suffix = line[m[6]:m[7]]
 				}
 				lines[i] = prefix + val + suffix
+				found = true
+			}
+		}
+		if !found {
+			sectionRe := regexp.MustCompile(`(?i)^\s*pipeline\s*:`)
+			for i, line := range lines {
+				if sectionRe.MatchString(line) {
+					newLine := "  " + key + ": " + val
+					lines = append(lines[:i+1], append([]string{newLine}, lines[i+1:]...)...)
+					break
+				}
 			}
 		}
 	}
@@ -115,6 +128,7 @@ func SaveConfig(path string, cfg *Config) error {
 	set("verbose", fmt.Sprintf("%t", cfg.Pipeline.Verbose))
 	set("read_mean", fmt.Sprintf("%.1f", cfg.Pipeline.ReadMean))
 	set("read_spread", fmt.Sprintf("%.1f", cfg.Pipeline.ReadSpread))
+	set("skip_revert_confirm", fmt.Sprintf("%t", cfg.Pipeline.SkipRevertConfirm))
 
 	return os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0644)
 }

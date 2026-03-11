@@ -1,0 +1,322 @@
+# Plan for Math Book I — attributes.yaml
+# "Everything Is a Rate of Change"
+#
+# Character: warm, grounded, wonder-struck. Domestic and human-scale.
+# Register gravity: warm, casual, whimsical, wonder-struck. Academic rare.
+# Setting gravity: kitchen, body, neighborhood, nature. Contemporary. Close-in.
+# Math visibility: mostly woven-in. A few front-and-center, a few buried.
+
+essays:
+  # Part 1: Everything Is a Rate of Change
+  - slug: snap-crackle-pop
+    arc: slow-build
+    ending: resolution
+    structure: narrative
+    entry: setting
+    register: warm
+    setting: "elevator-morning"
+    math_visibility: woven-in
+
+  - slug: derivative-chains
+    arc: catalog-of-wonders
+    ending: awe
+    structure: catalogue
+    entry: on-the-math
+    register: wonder-struck
+    setting: "various-domains"
+    math_visibility: front-and-center
+
+  - slug: euler-spiral
+    arc: walk
+    ending: communion
+    structure: narrative
+    entry: setting
+    register: casual
+    setting: "highway-afternoon"
+    math_visibility: woven-in
+
+  # Part 2: Your Body Already Knows
+  - slug: log-scale-senses
+    arc: slow-build
+    ending: resolution
+    structure: exposition
+    entry: question
+    register: warm
+    setting: "concert-hall-evening"
+    math_visibility: woven-in
+
+  - slug: fourier-transform-ear
+    arc: cold-open-mystery
+    ending: awe
+    structure: in-medias-res
+    entry: cold-open
+    register: wonder-struck
+    setting: "inner-ear-microscale"
+    math_visibility: front-and-center
+
+  - slug: color-perception
+    arc: demolition
+    ending: provocation
+    structure: argument
+    entry: contradiction
+    register: dry
+    setting: "art-museum-afternoon"
+    math_visibility: buried
+
+  - slug: single-photon-eye
+    arc: countdown
+    ending: awe
+    structure: narrative
+    entry: data
+    register: clinical
+    setting: "photoreceptor-lab"
+    math_visibility: front-and-center
+
+  # Part 3: What Your Kitchen Knows
+  - slug: cheerios-effect
+    arc: slow-build
+    ending: resolution
+    structure: narrative
+    entry: setting
+    register: warm
+    setting: "kitchen-morning"
+    math_visibility: woven-in
+
+  - slug: coffee-ring-effect
+    arc: cold-open-mystery
+    ending: resolution
+    structure: in-medias-res
+    entry: cold-open
+    register: casual
+    setting: "kitchen-counter"
+    math_visibility: woven-in
+
+  - slug: shower-curtain
+    arc: demolition
+    ending: provocation
+    structure: argument
+    entry: contradiction
+    register: sardonic
+    setting: "bathroom-morning"
+    math_visibility: buried
+
+  - slug: soap-bubbles
+    arc: slow-build
+    ending: awe
+    structure: meditation
+    entry: setting
+    register: lyrical
+    setting: "backyard-summer"
+    math_visibility: woven-in
+
+  - slug: central-limit-baking
+    arc: recipe
+    ending: communion
+    structure: field-guide
+    entry: setting
+    register: whimsical
+    setting: "kitchen-afternoon"
+    math_visibility: buried
+
+  # Part 4: What Nature Computed Before We Did
+  - slug: hexagons-beehives
+    arc: slow-build
+    ending: resolution
+    structure: exposition
+    entry: question
+    register: warm
+    setting: "apiary-summer"
+    math_visibility: woven-in
+
+  - slug: fibonacci-sunflowers
+    arc: countdown
+    ending: awe
+    structure: reverse-chronology
+    entry: data
+    register: wonder-struck
+    setting: "garden-morning"
+    math_visibility: front-and-center
+
+  - slug: turing-patterns
+    arc: dual-timeline
+    ending: provocation
+    structure: braided
+    entry: history
+    register: academic
+    setting: "1952-Manchester"
+    math_visibility: front-and-center
+
+  - slug: constructal-law
+    arc: zoom
+    ending: awe
+    structure: compare-contrast
+    entry: setting
+    register: wonder-struck
+    setting: "river-valley-aerial"
+    math_visibility: woven-in
+
+  - slug: snowflakes
+    arc: walk
+    ending: communion
+    structure: meditation
+    entry: setting
+    register: lyrical
+    setting: "mountain-snowfall"
+    math_visibility: woven-in
+
+  # Part 5: Hidden in Plain Sight
+  - slug: catenary
+    arc: confession
+    ending: resolution
+    structure: chronicle
+    entry: history
+    register: warm
+    setting: "florence-1638"
+    math_visibility: woven-in
+
+  - slug: wave-equation-pond
+    arc: walk
+    ending: handoff
+    structure: narrative
+    entry: setting
+    register: casual
+    setting: "lakeside-afternoon"
+    math_visibility: woven-in
+
+  - slug: deep-water-waves
+    arc: paradox
+    ending: awe
+    structure: exposition
+    entry: contradiction
+    register: dry
+    setting: "open-ocean"
+    math_visibility: front-and-center
+
+  - slug: mud-cracks
+    arc: cold-open-mystery
+    ending: honesty
+    structure: vignette-collage
+    entry: setting
+    register: clinical
+    setting: "desert-dry-season"
+    math_visibility: buried
+
+  - slug: chladni-figures
+    arc: slow-build
+    ending: awe
+    structure: narrative
+    entry: cold-open
+    register: wonder-struck
+    setting: "physics-lab-1787"
+    math_visibility: front-and-center
+
+  # Part 6: The Mathematics of Beautiful Things
+  - slug: musical-consonance
+    arc: slow-build
+    ending: resolution
+    structure: exposition
+    entry: question
+    register: warm
+    setting: "living-room-evening"
+    math_visibility: woven-in
+
+  - slug: piano-tuning
+    arc: paradox
+    ending: provocation
+    structure: dialogue
+    entry: contradiction
+    register: sardonic
+    setting: "piano-workshop"
+    math_visibility: front-and-center
+
+  - slug: islamic-tessellations
+    arc: dual-timeline
+    ending: awe
+    structure: braided
+    entry: history
+    register: lyrical
+    setting: "medieval-Isfahan"
+    math_visibility: woven-in
+
+  - slug: origami-geometry
+    arc: recipe
+    ending: resolution
+    structure: field-guide
+    entry: cold-open
+    register: whimsical
+    setting: "workshop-table"
+    math_visibility: buried
+
+  - slug: tessellations-bathroom
+    arc: cold-open-mystery
+    ending: awe
+    structure: narrative
+    entry: question
+    register: casual
+    setting: "bathroom-floor"
+    math_visibility: woven-in
+
+  # Part 7: The Mathematics of Living Together
+  - slug: arrows-impossibility
+    arc: paradox
+    ending: honesty
+    structure: argument
+    entry: contradiction
+    register: dry
+    setting: "election-night"
+    math_visibility: front-and-center
+
+  - slug: fair-cake-cutting
+    arc: recipe
+    ending: resolution
+    structure: field-guide
+    entry: question
+    register: whimsical
+    setting: "birthday-party"
+    math_visibility: woven-in
+
+  - slug: prisoners-dilemma-traffic
+    arc: argument
+    ending: provocation
+    structure: compare-contrast
+    entry: setting
+    register: urgent
+    setting: "rush-hour-highway"
+    math_visibility: woven-in
+
+  - slug: queuing-theory
+    arc: slow-build
+    ending: resolution
+    structure: exposition
+    entry: setting
+    register: casual
+    setting: "grocery-store-saturday"
+    math_visibility: buried
+
+  - slug: gerrymandering
+    arc: cold-open-mystery
+    ending: honesty
+    structure: narrative
+    entry: data
+    register: clinical
+    setting: "redistricting-office"
+    math_visibility: front-and-center
+
+  # Part 8: A Glimpse Upward
+  - slug: gps-relativity
+    arc: slow-build
+    ending: awe
+    structure: exposition
+    entry: setting
+    register: warm
+    setting: "car-dashboard-morning"
+    math_visibility: woven-in
+
+  - slug: doppler-effect
+    arc: zoom
+    ending: communion
+    structure: narrative
+    entry: setting
+    register: wonder-struck
+    setting: "street-corner-evening"
+    math_visibility: woven-in

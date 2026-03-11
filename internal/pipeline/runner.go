@@ -46,17 +46,7 @@ func NewRunner(cfg *Config, baseDir string) *Runner {
 }
 
 func exportFilename(essay *EssayState) string {
-	switch essay.Type {
-	case "section":
-		return fmt.Sprintf("cSection - 2026 - %s.%02d.00 %s.docx",
-			essay.Book, essay.Part, essay.Title)
-	case "introduction":
-		return fmt.Sprintf("cChapter - 2026 - %s.00.00 %s.docx",
-			essay.Book, essay.Title)
-	default:
-		return fmt.Sprintf("cChapter - 2026 - %s.%02d.%02d %s.docx",
-			essay.Book, essay.Part, essay.Order, essay.Title)
-	}
+	return exportFilenameFromParts(essay)
 }
 
 func shouldSkipStage(itemType string, stage Stage) bool {
@@ -145,6 +135,7 @@ func (r *Runner) DiscoverProjects() error {
 }
 
 func (r *Runner) LoadState() error {
+	designDir := filepath.Join(r.BaseDir, "design")
 	for _, ps := range r.Projects {
 		repairs := ps.RepairOrphans()
 		for _, msg := range repairs {
@@ -152,6 +143,13 @@ func (r *Runner) LoadState() error {
 		}
 		if err := ps.LoadFromDisk(); err != nil {
 			return fmt.Errorf("project %s: %w", ps.Project, err)
+		}
+		n, err := ps.ApplyAttributes(designDir)
+		if err != nil {
+			r.Log.Printf("[%s] WARNING: apply attributes: %v", ps.Project, err)
+		}
+		if n > 0 {
+			r.Log.Printf("[%s] Applied variation attributes to %d essays", ps.Project, n)
 		}
 	}
 	return nil
@@ -197,11 +195,17 @@ func (r *Runner) runProjectCycle(ctx context.Context, ps *PipelineState) ([]stri
 		return nil, fmt.Errorf("loading state: %w", err)
 	}
 
-	r.renderAllImages(ps)
-
 	selected := ps.SelectForCycle(&r.Config.Pipeline)
 	if len(selected) == 0 {
+		r.Log.Printf("[%s] Cycle: nothing to do", ps.Project)
 		return nil, nil
+	}
+
+	for _, e := range selected {
+		if e.NextAction() == StageIllustrate {
+			r.renderAllImages(ps)
+			break
+		}
 	}
 
 	if r.Config.Pipeline.Debug != "" {
@@ -586,7 +590,7 @@ func (r *Runner) buildPrompt(ps *PipelineState, essay *EssayState, targetStage S
 		if len(ideaContent) > 0 {
 			hook = ideaContent
 		}
-		prompt = ResearchPrompt(ideaMeta.Title, hook, hiddenMath)
+		prompt = ResearchPrompt(ideaMeta.Title, hook, hiddenMath, essay.Setting)
 
 	case StageOutline:
 		model = r.Config.Models.Outline
@@ -596,7 +600,10 @@ func (r *Runner) buildPrompt(ps *PipelineState, essay *EssayState, targetStage S
 		} else {
 			research := readContent(StageResearch)
 			arc, _ := ArcByName(essay.Arc)
-			prompt = OutlinePrompt(ideaMeta.Title, research, targetWords, arc)
+			structure, _ := StructureByName(essay.Structure)
+			entry, _ := EntryByName(essay.Entry)
+			mathVis, _ := MathVisByName(essay.MathVisibility)
+			prompt = OutlinePrompt(ideaMeta.Title, research, targetWords, arc, structure, entry, mathVis)
 		}
 
 	case StageDraft:
@@ -609,7 +616,11 @@ func (r *Runner) buildPrompt(ps *PipelineState, essay *EssayState, targetStage S
 			outline := readContent(StageOutline)
 			research := readContent(StageResearch)
 			arc, _ := ArcByName(essay.Arc)
-			prompt = DraftPrompt(ideaMeta.Title, outline, research, targetWords, arc)
+			structure, _ := StructureByName(essay.Structure)
+			entry, _ := EntryByName(essay.Entry)
+			register, _ := RegisterByName(essay.Register)
+			mathVis, _ := MathVisByName(essay.MathVisibility)
+			prompt = DraftPrompt(ideaMeta.Title, outline, research, targetWords, arc, structure, entry, register, essay.Setting, mathVis)
 		}
 
 	case StageFactcheck:
@@ -631,14 +642,16 @@ func (r *Runner) buildPrompt(ps *PipelineState, essay *EssayState, targetStage S
 			factcheck := readContent(StageFactcheck)
 			illustrate := readContent(StageIllustrate)
 			arc, _ := ArcByName(essay.Arc)
-			prompt = Draft2Prompt(ideaMeta.Title, draft, factcheck, illustrate, targetWords, arc)
+			register, _ := RegisterByName(essay.Register)
+			prompt = Draft2Prompt(ideaMeta.Title, draft, factcheck, illustrate, targetWords, arc, register)
 		}
 
 	case StageIllustrate:
 		model = r.Config.Models.Illustrate
 		draft := readContent(StageDraft)
 		factcheck := readContent(StageFactcheck)
-		prompt = IllustratePrompt(ideaMeta.Title, draft, factcheck, essay.Slug)
+		mathVis, _ := MathVisByName(essay.MathVisibility)
+		prompt = IllustratePrompt(ideaMeta.Title, draft, factcheck, essay.Slug, essay.Setting, mathVis)
 
 	default:
 		return "", "", fmt.Errorf("unknown target stage: %s", targetStage)
@@ -732,13 +745,18 @@ func (r *Runner) markError(ps *PipelineState, essay *EssayState, stage Stage, er
 		Created:   essay.Meta[StageIdeas].Created,
 		Started:   nowString(),
 		Error:     err.Error(),
+		Retries:   essay.ErrorRetries + 1,
 	}
 	ps.WriteMeta(stage, meta)
 
 	ps.mu.Lock()
 	essay.Status = "error"
+	essay.ErrorRetries++
 	essay.Meta[stage] = meta
 	ps.mu.Unlock()
+	if essay.ErrorRetries >= 3 {
+		r.Log.Printf("  %s: giving up after %d retries (revert to retry)", essay.Slug, essay.ErrorRetries)
+	}
 }
 
 func (r *Runner) TotalCycles() int {
@@ -753,6 +771,14 @@ func (r *Runner) TotalCost() float64 {
 	total := 0.0
 	for _, ps := range r.Projects {
 		total += ps.SessionCost
+	}
+	return total
+}
+
+func (r *Runner) RevertedCost() float64 {
+	total := 0.0
+	for _, ps := range r.Projects {
+		total += ps.RevertedCost()
 	}
 	return total
 }
@@ -838,6 +864,7 @@ func (r *Runner) writeImageSources(ps *PipelineState, slug, content string) erro
 }
 
 func (r *Runner) renderAllImages(ps *PipelineState) {
+	r.Log.Printf("[%s] imagerender: starting", ps.Project)
 	dataDir := filepath.Join(r.BaseDir, "data")
 	cmd := exec.Command("imagerender", "--data", dataDir, ps.BaseDir)
 	output, err := cmd.CombinedOutput()
@@ -847,7 +874,8 @@ func (r *Runner) renderAllImages(ps *PipelineState) {
 	}
 	lines := strings.TrimSpace(string(output))
 	for _, line := range strings.Split(lines, "\n") {
-		if strings.Contains(line, "FAILED") || strings.Contains(line, "rendered") {
+		line = strings.TrimSpace(line)
+		if line != "" {
 			r.Log.Printf("[%s] imagerender: %s", ps.Project, line)
 		}
 	}

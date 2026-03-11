@@ -179,6 +179,7 @@ func (d *Dashboard) Start() error {
 	mux.HandleFunc("/api/open", d.handleOpen)
 
 	mux.HandleFunc("/api/open-docx", d.handleOpenDocx)
+	mux.HandleFunc("/api/revert", d.handleRevert)
 	mux.HandleFunc("/api/disk-stats", d.handleDiskStats)
 	mux.HandleFunc("/api/logs", d.handleLogs)
 	mux.HandleFunc("/api/pause", d.handlePause)
@@ -200,21 +201,22 @@ func (d *Dashboard) handleIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 type statusResponse struct {
-	DryRun        bool                    `json:"dry_run"`
-	Verbose       bool                    `json:"verbose"`
-	Paused        bool                    `json:"paused"`
-	Cycle         int                     `json:"cycle"`
-	TotalCost     float64                 `json:"total_cost"`
-	CycleInterval int                     `json:"cycle_interval"`
-	SecondsLeft   int                     `json:"seconds_left"`
-	CycleRunning  bool                    `json:"cycle_running"`
-	CycleElapsed  int                     `json:"cycle_elapsed"`
-	RetryMessage  string                  `json:"retry_message"`
-	ReadMean      float64                 `json:"read_mean"`
-	ReadSpread    float64                 `json:"read_spread"`
-	Projects      []projectStatusResponse `json:"projects"`
-	Summary       map[string]int          `json:"summary"`
-	LastLog       []string                `json:"last_log"`
+	DryRun            bool                    `json:"dry_run"`
+	Verbose           bool                    `json:"verbose"`
+	Paused            bool                    `json:"paused"`
+	Cycle             int                     `json:"cycle"`
+	TotalCost         float64                 `json:"total_cost"`
+	CycleInterval     int                     `json:"cycle_interval"`
+	SecondsLeft       int                     `json:"seconds_left"`
+	CycleRunning      bool                    `json:"cycle_running"`
+	CycleElapsed      int                     `json:"cycle_elapsed"`
+	RetryMessage      string                  `json:"retry_message"`
+	ReadMean          float64                 `json:"read_mean"`
+	ReadSpread        float64                 `json:"read_spread"`
+	SkipRevertConfirm bool                    `json:"skip_revert_confirm"`
+	Projects          []projectStatusResponse `json:"projects"`
+	Summary           map[string]int          `json:"summary"`
+	LastLog           []string                `json:"last_log"`
 }
 
 type projectStatusResponse struct {
@@ -264,21 +266,22 @@ func (d *Dashboard) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := statusResponse{
-		DryRun:        d.Runner.Config.Pipeline.DryRun,
-		Verbose:       d.Runner.Config.Pipeline.Verbose,
-		Paused:        paused,
-		Cycle:         d.Runner.TotalCycles(),
-		TotalCost:     d.Runner.TotalCost(),
-		CycleInterval: d.CycleInterval,
-		SecondsLeft:   secsLeft,
-		CycleRunning:  running,
-		CycleElapsed:  elapsed,
-		RetryMessage:  retryMsg,
-		ReadMean:      d.Runner.Config.Pipeline.ReadMean,
-		ReadSpread:    d.Runner.Config.Pipeline.ReadSpread,
-		Projects:      projectStatuses,
-		Summary:       totalSummary,
-		LastLog:       lastLog,
+		DryRun:            d.Runner.Config.Pipeline.DryRun,
+		Verbose:           d.Runner.Config.Pipeline.Verbose,
+		Paused:            paused,
+		Cycle:             d.Runner.TotalCycles(),
+		TotalCost:         d.Runner.TotalCost() + d.Runner.RevertedCost(),
+		CycleInterval:     d.CycleInterval,
+		SecondsLeft:       secsLeft,
+		CycleRunning:      running,
+		CycleElapsed:      elapsed,
+		RetryMessage:      retryMsg,
+		ReadMean:          d.Runner.Config.Pipeline.ReadMean,
+		ReadSpread:        d.Runner.Config.Pipeline.ReadSpread,
+		SkipRevertConfirm: d.Runner.Config.Pipeline.SkipRevertConfirm,
+		Projects:          projectStatuses,
+		Summary:           totalSummary,
+		LastLog:           lastLog,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -437,10 +440,11 @@ func (d *Dashboard) handleSettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		CycleInterval *int     `json:"cycle_interval"`
-		Verbose       *bool    `json:"verbose"`
-		ReadMean      *float64 `json:"read_mean"`
-		ReadSpread    *float64 `json:"read_spread"`
+		CycleInterval     *int     `json:"cycle_interval"`
+		Verbose           *bool    `json:"verbose"`
+		ReadMean          *float64 `json:"read_mean"`
+		ReadSpread        *float64 `json:"read_spread"`
+		SkipRevertConfirm *bool    `json:"skip_revert_confirm"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -464,6 +468,9 @@ func (d *Dashboard) handleSettings(w http.ResponseWriter, r *http.Request) {
 	if req.ReadSpread != nil && *req.ReadSpread >= 0.5 && *req.ReadSpread <= 3 {
 		d.Runner.Config.Pipeline.ReadSpread = *req.ReadSpread
 	}
+	if req.SkipRevertConfirm != nil {
+		d.Runner.Config.Pipeline.SkipRevertConfirm = *req.SkipRevertConfirm
+	}
 
 	if err := SaveConfig(d.ConfigPath, d.Runner.Config); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -472,6 +479,49 @@ func (d *Dashboard) handleSettings(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	fmt.Fprintf(w, `{"ok":true}`)
+}
+
+func (d *Dashboard) handleRevert(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+
+	project := r.URL.Query().Get("project")
+	slug := r.URL.Query().Get("slug")
+	stage := r.URL.Query().Get("stage")
+	if project == "" || slug == "" || stage == "" {
+		http.Error(w, "project, slug, and stage required", http.StatusBadRequest)
+		return
+	}
+
+	target := StageFromString(stage)
+
+	var ps *PipelineState
+	for _, p := range d.Runner.Projects {
+		if p.Project == project {
+			ps = p
+			break
+		}
+	}
+	if ps == nil {
+		http.Error(w, "project not found", http.StatusNotFound)
+		return
+	}
+
+	removed, err := ps.RevertToStage(slug, target)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	d.Runner.Log.Printf("[%s] REVERT %s to %s (removed: %v)", project, slug, stage, removed)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(struct {
+		Ok      bool     `json:"ok"`
+		Removed []string `json:"removed"`
+	}{Ok: true, Removed: removed})
 }
 
 func (d *Dashboard) handleDiskStats(w http.ResponseWriter, r *http.Request) {
@@ -497,7 +547,7 @@ func (d *Dashboard) handleDiskStats(w http.ResponseWriter, r *http.Request) {
 	totalCost := 0.0
 	for _, ps := range d.Runner.Projects {
 		ps.mu.Lock()
-		totalCost += ps.TotalCost + ps.SessionCost
+		totalCost += ps.TotalCost + ps.SessionCost + ps.RevertedCost()
 		ps.mu.Unlock()
 	}
 
@@ -509,21 +559,28 @@ func (d *Dashboard) handleDiskStats(w http.ResponseWriter, r *http.Request) {
 }
 
 type essayJSON struct {
-	Project   string `json:"project"`
-	Slug      string `json:"slug"`
-	Title     string `json:"title"`
-	Type      string `json:"type"`
-	Book      string `json:"book"`
-	Part      int    `json:"part"`
-	PartTitle string `json:"part_title"`
-	Order     int    `json:"order"`
-	Stage     string `json:"stage"`
-	Status    string `json:"status"`
-	Arc       string `json:"arc,omitempty"`
-	Error     string `json:"error,omitempty"`
-	HasDocx   bool   `json:"has_docx"`
-	WordCount int    `json:"word_count,omitempty"`
-	ReadMins  int    `json:"read_mins,omitempty"`
+	Project        string `json:"project"`
+	Slug           string `json:"slug"`
+	Title          string `json:"title"`
+	Type           string `json:"type"`
+	Book           string `json:"book"`
+	Part           int    `json:"part"`
+	PartTitle      string `json:"part_title"`
+	Order          int    `json:"order"`
+	Stage          string `json:"stage"`
+	Status         string `json:"status"`
+	Arc            string `json:"arc,omitempty"`
+	Ending         string `json:"ending,omitempty"`
+	Structure      string `json:"structure,omitempty"`
+	Entry          string `json:"entry,omitempty"`
+	Register       string `json:"register,omitempty"`
+	Setting        string `json:"setting,omitempty"`
+	MathVisibility string `json:"math_visibility,omitempty"`
+	Error          string `json:"error,omitempty"`
+	HasDocx        bool   `json:"has_docx"`
+	WordCount      int    `json:"word_count,omitempty"`
+	ReadMins       int    `json:"read_mins,omitempty"`
+	Stale          bool   `json:"stale,omitempty"`
 }
 
 func (d *Dashboard) handleEssays(w http.ResponseWriter, r *http.Request) {
@@ -563,22 +620,45 @@ func (d *Dashboard) handleEssays(w http.ResponseWriter, r *http.Request) {
 					break
 				}
 			}
+			stale := false
+			if e.CurrentStage > StageIdeas {
+				metaPath := filepath.Join(ps.BaseDir, "ideas", e.Slug+".meta.yaml")
+				if metaInfo, err := os.Stat(metaPath); err == nil {
+					metaMod := metaInfo.ModTime()
+					for _, s := range []string{"research", "outline", "draft", "factcheck", "illustrate", "draft2"} {
+						cp := filepath.Join(ps.BaseDir, s, e.Slug+".md")
+						if ci, err := os.Stat(cp); err == nil {
+							if metaMod.After(ci.ModTime()) {
+								stale = true
+								break
+							}
+						}
+					}
+				}
+			}
 			essays = append(essays, essayJSON{
-				Project:   ps.Project,
-				Slug:      e.Slug,
-				Title:     e.Title,
-				Type:      e.Type,
-				Book:      e.Book,
-				Part:      e.Part,
-				PartTitle: e.PartTitle,
-				Order:     e.Order,
-				Stage:     stage,
-				Status:    status,
-				Arc:       e.Arc,
-				Error:     errMsg,
-				HasDocx:   hasDocx,
-				WordCount: wordCount,
-				ReadMins:  readMins,
+				Project:        ps.Project,
+				Slug:           e.Slug,
+				Title:          e.Title,
+				Type:           e.Type,
+				Book:           e.Book,
+				Part:           e.Part,
+				PartTitle:      e.PartTitle,
+				Order:          e.Order,
+				Stage:          stage,
+				Status:         status,
+				Arc:            e.Arc,
+				Ending:         e.Ending,
+				Structure:      e.Structure,
+				Entry:          e.Entry,
+				Register:       e.Register,
+				Setting:        e.Setting,
+				MathVisibility: e.MathVisibility,
+				Error:          errMsg,
+				HasDocx:        hasDocx,
+				WordCount:      wordCount,
+				ReadMins:       readMins,
+				Stale:          stale,
 			})
 		}
 	}
@@ -587,6 +667,9 @@ func (d *Dashboard) handleEssays(w http.ResponseWriter, r *http.Request) {
 		ri, rj := stageRank(essays[i].Stage), stageRank(essays[j].Stage)
 		if ri != rj {
 			return ri < rj
+		}
+		if essays[i].Stale != essays[j].Stale {
+			return essays[i].Stale
 		}
 		if essays[i].Book != essays[j].Book {
 			return essays[i].Book < essays[j].Book
@@ -603,6 +686,8 @@ func (d *Dashboard) handleEssays(w http.ResponseWriter, r *http.Request) {
 
 func stageRank(stage string) int {
 	switch stage {
+	case "ideas":
+		return 0
 	case "research":
 		return 1
 	case "outline":
@@ -719,9 +804,39 @@ const dashboardHTML = `<!DOCTYPE html>
   .open-btn { background: #2e7d32; color: white; border: none; padding: 3px 10px; border-radius: 3px;
               font-size: 0.75rem; cursor: pointer; font-weight: bold; }
   .open-btn:hover { background: #388e3c; }
+  .modal-overlay { display:none; position:fixed; top:0; left:0; width:100%; height:100%;
+                   background:rgba(0,0,0,0.6); z-index:1000; align-items:center; justify-content:center; }
+  .modal-overlay.active { display:flex; }
+  .modal-box { background:#1a1a2e; border:1px solid #2a2a4e; border-radius:8px; padding:24px;
+               max-width:420px; width:90%; color:#e0e0e0; }
+  .modal-box h3 { margin:0 0 12px; color:#e94560; font-size:1rem; }
+  .modal-box p { margin:0 0 16px; font-size:0.85rem; line-height:1.4; }
+  .modal-box label { font-size:0.8rem; color:#8899aa; cursor:pointer; display:flex; align-items:center; gap:6px; }
+  .modal-btns { display:flex; gap:10px; margin-top:16px; justify-content:flex-end; }
+  .modal-btns button { padding:6px 16px; border:none; border-radius:4px; cursor:pointer; font-size:0.8rem; font-weight:bold; }
+  .modal-btn-cancel { background:#2a2a4e; color:#8899aa; }
+  .modal-btn-cancel:hover { background:#3a3a5e; }
+  .modal-btn-confirm { background:#e94560; color:white; }
+  .modal-btn-confirm:hover { background:#d63050; }
+  .error-popover { position:fixed; z-index:2000; background:#2a1a1a; border:1px solid #e94560;
+                   border-radius:6px; padding:12px 16px; max-width:500px; color:#e0e0e0;
+                   font-size:0.8rem; line-height:1.4; box-shadow:0 4px 12px rgba(0,0,0,0.5); }
+  .error-popover .close-pop { float:right; cursor:pointer; color:#8899aa; margin-left:8px; }
+  .error-popover .close-pop:hover { color:#e94560; }
 </style>
 </head>
 <body>
+<div id="revertModal" class="modal-overlay">
+  <div class="modal-box">
+    <h3>Confirm Revert</h3>
+    <p id="revertModalMsg"></p>
+    <label><input type="checkbox" id="revertSkipCheck"> Do not show this again</label>
+    <div class="modal-btns">
+      <button class="modal-btn-cancel" onclick="revertModalResolve(false)">Cancel</button>
+      <button class="modal-btn-confirm" onclick="revertModalResolve(true)">Revert</button>
+    </div>
+  </div>
+</div>
 <div class="layout">
 <div class="main-panel">
   <h1>Pipeline Dashboard <span id="mode" class="mode dry">DRY RUN</span></h1>
@@ -770,7 +885,7 @@ const dashboardHTML = `<!DOCTYPE html>
 
   <table>
     <thead>
-      <tr><th>Project</th><th>#</th><th>Type</th><th>Title</th><th>Stage</th><th>Arc</th><th>Length</th><th>Status</th><th></th></tr>
+      <tr><th>Project</th><th>#</th><th>Type</th><th>Revert</th><th>Title</th><th>Stage</th><th>Attributes</th><th>Length</th><th>Status</th><th></th></tr>
     </thead>
     <tbody id="essayTable"></tbody>
   </table>
@@ -887,6 +1002,9 @@ async function refresh() {
     verbose = s.verbose;
     document.getElementById('verboseToggle').checked = verbose;
   }
+  if (s.skip_revert_confirm !== undefined) {
+    skipRevertConfirm = s.skip_revert_confirm;
+  }
   document.getElementById('pending').textContent = s.summary.pending || 0;
   document.getElementById('research').textContent = s.summary.research || 0;
   document.getElementById('outline').textContent = s.summary.outline || 0;
@@ -926,16 +1044,88 @@ async function refresh() {
     '<td>' + esc(e.project) + '</td>' +
     '<td>' + idStr + '</td>' +
     '<td>' + esc(e.type || 'essay') + '</td>' +
-    '<td><a href="#" onclick="openFolder(\x27' + encodeURIComponent(e.project) + '\x27,\x27' + encodeURIComponent(e.slug) + '\x27);return false" style="color:#e94560;text-decoration:none">' + esc(e.title) + '</a></td>' +
+    '<td>' + revertDropdown(e) + '</td>' +
+    '<td><a href="#" onclick="openFolder(\x27' + encodeURIComponent(e.project) + '\x27,\x27' + encodeURIComponent(e.slug) + '\x27);return false" style="color:#e94560;text-decoration:none">' + (e.stale ? '<span title="Attributes newer than content" style="color:#ff6b6b;font-size:0.5em;vertical-align:middle;margin-right:3px">\u25cf</span>' : '') + esc(e.title) + '</a></td>' +
     '<td><span class="stage-badge stage-' + e.stage + '">' + e.stage + '</span></td>' +
-    '<td>' + (e.arc ? esc(e.arc) : '-') + '</td>' +
+    '<td title="' + attrTooltip(e) + '">' + attrCompact(e) + '</td>' +
     '<td>' + lenStr + '</td>' +
-    '<td class="status-' + e.status + '">' + e.status + (e.error ? ' <span title="' + esc(e.error) + '" style="cursor:help">\u26a0</span>' : '') + '</td>' +
+    '<td class="status-' + e.status + '">' + e.status + (e.error ? ' <span onclick="showError(this,\x27' + esc(e.error).replace(/'/g,'\x27') + '\x27)" style="cursor:pointer;color:#ff9800">\u26a0</span>' : '') + '</td>' +
     '<td>' + (e.has_docx ? '<button class="open-btn" onclick="openDocx(\x27' + encodeURIComponent(e.project) + '\x27,\x27' + encodeURIComponent(e.slug) + '\x27)">Open</button>' : '') + '</td>' +
     '</tr>';
   }).join('');
 }
 function esc(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+function attrCompact(e) {
+  var parts = [e.structure, e.register].filter(Boolean);
+  return parts.length ? esc(parts.join(' \u00b7 ')) : '-';
+}
+function attrTooltip(e) {
+  var lines = [];
+  if (e.arc) lines.push('Arc: ' + e.arc);
+  if (e.ending) lines.push('Ending: ' + e.ending);
+  if (e.structure) lines.push('Structure: ' + e.structure);
+  if (e.entry) lines.push('Entry: ' + e.entry);
+  if (e.register) lines.push('Register: ' + e.register);
+  if (e.setting) lines.push('Setting: ' + e.setting);
+  if (e.math_visibility) lines.push('MathVis: ' + e.math_visibility);
+  return esc(lines.join('\n'));
+}
+function revertDropdown(e) {
+  var stages = ['ideas','research','outline','draft','factcheck','illustrate','draft2','export'];
+  var id = 'rev-' + e.slug;
+  var html = '<select id="' + id + '" style="background:#16213e;color:#8899aa;border:1px solid #2a2a4e;border-radius:3px;font-size:0.7rem;padding:1px 2px;cursor:pointer" onfocus="refreshPaused=true" onblur="refreshPaused=false" onchange="doRevert(\x27' + encodeURIComponent(e.project) + '\x27,\x27' + encodeURIComponent(e.slug) + '\x27,this)">';
+  html += '<option value="">\u21a9</option>';
+  for (var i = 0; i < stages.length; i++) {
+    html += '<option value="' + stages[i] + '">' + stages[i] + '</option>';
+  }
+  html += '</select>';
+  return html;
+}
+var skipRevertConfirm = false;
+var revertModalResolve = function() {};
+var activePopover = null;
+function showError(el, msg) {
+  if (activePopover) { activePopover.remove(); activePopover = null; }
+  var pop = document.createElement('div');
+  pop.className = 'error-popover';
+  pop.innerHTML = '<span class="close-pop" onclick="this.parentNode.remove();activePopover=null">&times;</span>' + esc(msg);
+  document.body.appendChild(pop);
+  var rect = el.getBoundingClientRect();
+  pop.style.top = (rect.bottom + 4) + 'px';
+  pop.style.left = Math.min(rect.left, window.innerWidth - 520) + 'px';
+  activePopover = pop;
+}
+function showRevertModal(msg) {
+  return new Promise(function(resolve) {
+    document.getElementById('revertModalMsg').textContent = msg;
+    document.getElementById('revertSkipCheck').checked = false;
+    var modal = document.getElementById('revertModal');
+    modal.classList.add('active');
+    revertModalResolve = async function(ok) {
+      modal.classList.remove('active');
+      if (ok && document.getElementById('revertSkipCheck').checked) {
+        skipRevertConfirm = true;
+        await fetch('/api/settings', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({skip_revert_confirm:true}) });
+      }
+      resolve(ok);
+    };
+  });
+}
+async function doRevert(project, slug, sel) {
+  var stage = sel.value;
+  if (!stage) { refreshPaused = false; return; }
+  if (!skipRevertConfirm) {
+    var ok = await showRevertModal('Revert ' + decodeURIComponent(slug) + ' to ' + stage + '? Files from ' + stage + ' onward will be deleted.');
+    if (!ok) { sel.value = ''; refreshPaused = false; return; }
+  }
+  var url = '/api/revert?project=' + project + '&slug=' + slug + '&stage=' + encodeURIComponent(stage);
+  var res = await fetch(url, { method: 'POST' });
+  var data = await res.json();
+  sel.value = '';
+  refreshPaused = false;
+  if (data.ok) { refresh(); }
+  else { alert('Revert failed'); }
+}
 function filterProject(p) { activeProject = p; refresh(); }
 async function openFolder(project, slug) {
   await fetch('/api/open?project=' + project + '&slug=' + slug);
@@ -992,10 +1182,11 @@ async function refreshDiskStats() {
   document.getElementById('dk-export').textContent = c.export || 0;
   document.getElementById('dk-cost').textContent = '$' + d.total_cost.toFixed(2);
 }
+var refreshPaused = false;
 refresh();
 refreshLogs();
 refreshDiskStats();
-setInterval(refresh, 1000);
+setInterval(function() { if (!refreshPaused) refresh(); }, 1000);
 setInterval(refreshLogs, 500);
 setInterval(refreshDiskStats, 10000);
 </script>

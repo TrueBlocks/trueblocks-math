@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"encoding/json"
 	"fmt"
 	randv2 "math/rand/v2"
 	"os"
@@ -56,38 +57,50 @@ func StageFromString(s string) Stage {
 }
 
 type EssayMeta struct {
-	Slug      string  `yaml:"slug"`
-	Title     string  `yaml:"title"`
-	Type      string  `yaml:"type"`
-	Book      string  `yaml:"book"`
-	Part      int     `yaml:"part"`
-	PartTitle string  `yaml:"part_title"`
-	Order     int     `yaml:"order"`
-	Status    string  `yaml:"status"`
-	Model     string  `yaml:"model"`
-	Arc       string  `yaml:"arc,omitempty"`
-	Ending    string  `yaml:"ending,omitempty"`
-	Created   string  `yaml:"created"`
-	Started   string  `yaml:"started,omitempty"`
-	Completed string  `yaml:"completed,omitempty"`
-	Tokens    int     `yaml:"tokens,omitempty"`
-	Cost      float64 `yaml:"cost,omitempty"`
-	Error     string  `yaml:"error,omitempty"`
+	Slug           string  `yaml:"slug"`
+	Title          string  `yaml:"title"`
+	Type           string  `yaml:"type"`
+	Book           string  `yaml:"book"`
+	Part           int     `yaml:"part"`
+	PartTitle      string  `yaml:"part_title"`
+	Order          int     `yaml:"order"`
+	Status         string  `yaml:"status"`
+	Model          string  `yaml:"model"`
+	Arc            string  `yaml:"arc,omitempty"`
+	Ending         string  `yaml:"ending,omitempty"`
+	Structure      string  `yaml:"structure,omitempty"`
+	Entry          string  `yaml:"entry,omitempty"`
+	Register       string  `yaml:"register,omitempty"`
+	Setting        string  `yaml:"setting,omitempty"`
+	MathVisibility string  `yaml:"math_visibility,omitempty"`
+	Created        string  `yaml:"created"`
+	Started        string  `yaml:"started,omitempty"`
+	Completed      string  `yaml:"completed,omitempty"`
+	Tokens         int     `yaml:"tokens,omitempty"`
+	Cost           float64 `yaml:"cost,omitempty"`
+	Error          string  `yaml:"error,omitempty"`
+	Retries        int     `yaml:"retries,omitempty"`
 }
 
 type EssayState struct {
-	Slug         string
-	Title        string
-	Type         string
-	Book         string
-	Part         int
-	PartTitle    string
-	Order        int
-	Arc          string
-	Ending       string
-	CurrentStage Stage
-	Status       string
-	Meta         map[Stage]*EssayMeta
+	Slug           string
+	Title          string
+	Type           string
+	Book           string
+	Part           int
+	PartTitle      string
+	Order          int
+	Arc            string
+	Ending         string
+	Structure      string
+	Entry          string
+	Register       string
+	Setting        string
+	MathVisibility string
+	CurrentStage   Stage
+	Status         string
+	ErrorRetries   int
+	Meta           map[Stage]*EssayMeta
 }
 
 func (e *EssayState) NextAction() Stage {
@@ -109,7 +122,13 @@ func (e *EssayState) IsDone() bool {
 
 func (e *EssayState) IsAvailable() bool {
 	next := e.NextAction()
-	return next != StageDone && e.Status != "in-progress"
+	if next == StageDone || e.Status == "in-progress" {
+		return false
+	}
+	if e.Status == "error" && e.ErrorRetries >= 3 {
+		return false
+	}
+	return true
 }
 
 type PipelineState struct {
@@ -167,21 +186,30 @@ func (ps *PipelineState) LoadFromDisk() error {
 				return fmt.Errorf("parsing %s/%s: %w", stageName, entry.Name(), err)
 			}
 
+			if meta.Slug == "" && meta.Title == "" {
+				continue
+			}
+
 			essay, ok := ps.Essays[slug]
 			if !ok {
 				essay = &EssayState{
-					Slug:         meta.Slug,
-					Title:        meta.Title,
-					Type:         meta.Type,
-					Book:         meta.Book,
-					Part:         meta.Part,
-					PartTitle:    meta.PartTitle,
-					Order:        meta.Order,
-					Arc:          meta.Arc,
-					Ending:       meta.Ending,
-					CurrentStage: stage,
-					Status:       meta.Status,
-					Meta:         make(map[Stage]*EssayMeta),
+					Slug:           meta.Slug,
+					Title:          meta.Title,
+					Type:           meta.Type,
+					Book:           meta.Book,
+					Part:           meta.Part,
+					PartTitle:      meta.PartTitle,
+					Order:          meta.Order,
+					Arc:            meta.Arc,
+					Ending:         meta.Ending,
+					Structure:      meta.Structure,
+					Entry:          meta.Entry,
+					Register:       meta.Register,
+					Setting:        meta.Setting,
+					MathVisibility: meta.MathVisibility,
+					CurrentStage:   stage,
+					Status:         meta.Status,
+					Meta:           make(map[Stage]*EssayMeta),
 				}
 				ps.Essays[slug] = essay
 			}
@@ -196,9 +224,27 @@ func (ps *PipelineState) LoadFromDisk() error {
 			if meta.Ending != "" {
 				essay.Ending = meta.Ending
 			}
+			if meta.Structure != "" {
+				essay.Structure = meta.Structure
+			}
+			if meta.Entry != "" {
+				essay.Entry = meta.Entry
+			}
+			if meta.Register != "" {
+				essay.Register = meta.Register
+			}
+			if meta.Setting != "" {
+				essay.Setting = meta.Setting
+			}
+			if meta.MathVisibility != "" {
+				essay.MathVisibility = meta.MathVisibility
+			}
 			if stage > essay.CurrentStage {
 				essay.CurrentStage = stage
 				essay.Status = meta.Status
+			}
+			if meta.Status == "error" && stage == essay.CurrentStage {
+				essay.ErrorRetries = meta.Retries
 			}
 			ps.TotalCost += meta.Cost
 		}
@@ -261,6 +307,237 @@ func ParseDebug(debug string) (book string, part, order int, ok bool) {
 	return book, part, order, true
 }
 
+type attributeEntry struct {
+	Slug           string `yaml:"slug"`
+	Arc            string `yaml:"arc"`
+	Ending         string `yaml:"ending"`
+	Structure      string `yaml:"structure"`
+	Entry          string `yaml:"entry"`
+	Register       string `yaml:"register"`
+	Setting        string `yaml:"setting"`
+	MathVisibility string `yaml:"math_visibility"`
+}
+
+type attributeFile struct {
+	Essays []attributeEntry `yaml:"essays"`
+}
+
+func (ps *PipelineState) ApplyAttributes(designDir string) (int, error) {
+	pattern := filepath.Join(designDir, "*attributes.yaml")
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		return 0, err
+	}
+
+	lookup := make(map[string]attributeEntry)
+	for _, path := range matches {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return 0, fmt.Errorf("reading %s: %w", path, err)
+		}
+		var af attributeFile
+		if err := yaml.Unmarshal(data, &af); err != nil {
+			return 0, fmt.Errorf("parsing %s: %w", path, err)
+		}
+		for _, e := range af.Essays {
+			lookup[e.Slug] = e
+		}
+	}
+
+	updated := 0
+	for slug, essay := range ps.Essays {
+		attr, ok := lookup[slug]
+		if !ok {
+			continue
+		}
+		changed := false
+		if attr.Structure != "" && essay.Structure != attr.Structure {
+			essay.Structure = attr.Structure
+			changed = true
+		}
+		if attr.Entry != "" && essay.Entry != attr.Entry {
+			essay.Entry = attr.Entry
+			changed = true
+		}
+		if attr.Register != "" && essay.Register != attr.Register {
+			essay.Register = attr.Register
+			changed = true
+		}
+		if attr.Setting != "" && essay.Setting != attr.Setting {
+			essay.Setting = attr.Setting
+			changed = true
+		}
+		if attr.MathVisibility != "" && essay.MathVisibility != attr.MathVisibility {
+			essay.MathVisibility = attr.MathVisibility
+			changed = true
+		}
+		if changed {
+			if meta, ok := essay.Meta[StageIdeas]; ok {
+				meta.Structure = essay.Structure
+				meta.Entry = essay.Entry
+				meta.Register = essay.Register
+				meta.Setting = essay.Setting
+				meta.MathVisibility = essay.MathVisibility
+				if err := ps.WriteMeta(StageIdeas, meta); err != nil {
+					return updated, fmt.Errorf("writing meta for %s: %w", slug, err)
+				}
+			}
+			updated++
+		}
+	}
+	return updated, nil
+}
+
+type AccountingEntry struct {
+	Slug       string  `json:"slug"`
+	Stage      string  `json:"stage"`
+	RevertedAt string  `json:"reverted_at"`
+	RevertedTo string  `json:"reverted_to"`
+	TokensIn   int     `json:"tokens_in,omitempty"`
+	TokensOut  int     `json:"tokens_out,omitempty"`
+	Cost       float64 `json:"cost,omitempty"`
+	Model      string  `json:"model,omitempty"`
+}
+
+type AccountingFile struct {
+	Reverted []AccountingEntry `json:"reverted"`
+}
+
+func loadAccounting(path string) (*AccountingFile, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return &AccountingFile{}, nil
+		}
+		return nil, err
+	}
+	var af AccountingFile
+	if err := json.Unmarshal(data, &af); err != nil {
+		return nil, err
+	}
+	return &af, nil
+}
+
+func saveAccounting(path string, af *AccountingFile) error {
+	data, err := json.MarshalIndent(af, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0644)
+}
+
+func (ps *PipelineState) accountingPath() string {
+	return filepath.Join(ps.BaseDir, "accounting.json")
+}
+
+func (ps *PipelineState) RevertedCost() float64 {
+	af, err := loadAccounting(ps.accountingPath())
+	if err != nil {
+		return 0
+	}
+	var total float64
+	for _, e := range af.Reverted {
+		total += e.Cost
+	}
+	return total
+}
+
+func (ps *PipelineState) RevertToStage(slug string, target Stage) ([]string, error) {
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+
+	essay, ok := ps.Essays[slug]
+	if !ok {
+		return nil, fmt.Errorf("essay %q not found", slug)
+	}
+
+	var removed []string
+	start := int(target)
+	if target <= StageIdeas {
+		start = int(StageResearch)
+	}
+
+	now := nowString()
+	af, _ := loadAccounting(ps.accountingPath())
+	if af == nil {
+		af = &AccountingFile{}
+	}
+
+	for stageIdx := start; stageIdx <= int(StageExport); stageIdx++ {
+		stage := Stage(stageIdx)
+		dir := filepath.Join(ps.BaseDir, stage.Dir())
+
+		metaPath := filepath.Join(dir, slug+".meta.yaml")
+		if data, err := os.ReadFile(metaPath); err == nil {
+			var meta EssayMeta
+			if yaml.Unmarshal(data, &meta) == nil && meta.Cost > 0 {
+				af.Reverted = append(af.Reverted, AccountingEntry{
+					Slug:       slug,
+					Stage:      stage.String(),
+					RevertedAt: now,
+					RevertedTo: target.String(),
+					TokensIn:   meta.Tokens,
+					Cost:       meta.Cost,
+					Model:      meta.Model,
+				})
+			}
+		}
+
+		for _, ext := range []string{".md", ".meta.yaml"} {
+			path := filepath.Join(dir, slug+ext)
+			if _, err := os.Stat(path); err == nil {
+				if err := os.Remove(path); err != nil {
+					return removed, fmt.Errorf("removing %s: %w", path, err)
+				}
+				removed = append(removed, stage.String()+ext)
+			}
+		}
+		delete(essay.Meta, stage)
+	}
+
+	saveAccounting(ps.accountingPath(), af)
+
+	exportDir := filepath.Join(ps.BaseDir, "export")
+	docxPath := filepath.Join(exportDir, exportFilenameFromParts(essay))
+	if _, err := os.Stat(docxPath); err == nil {
+		if err := os.Remove(docxPath); err != nil {
+			return removed, fmt.Errorf("removing docx: %w", err)
+		}
+		removed = append(removed, "export.docx")
+	}
+
+	if target <= StageIdeas {
+		essay.CurrentStage = StageIdeas
+		essay.Status = "pending"
+		if meta, ok := essay.Meta[StageIdeas]; ok {
+			meta.Status = "pending"
+			if err := ps.WriteMeta(StageIdeas, meta); err != nil {
+				return removed, fmt.Errorf("resetting ideas meta: %w", err)
+			}
+		}
+	} else {
+		prev := target - 1
+		essay.CurrentStage = prev
+		essay.Status = "final"
+	}
+
+	return removed, nil
+}
+
+func exportFilenameFromParts(essay *EssayState) string {
+	switch essay.Type {
+	case "section":
+		return fmt.Sprintf("cSection - 2026 - %s.%02d.00 %s.docx",
+			essay.Book, essay.Part, essay.Title)
+	case "introduction":
+		return fmt.Sprintf("cChapter - 2026 - %s.00.00 %s.docx",
+			essay.Book, essay.Title)
+	default:
+		return fmt.Sprintf("cChapter - 2026 - %s.%02d.%02d %s.docx",
+			essay.Book, essay.Part, essay.Order, essay.Title)
+	}
+}
+
 func (ps *PipelineState) SelectForCycle(cfg *PipelineConfig) []*EssayState {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
@@ -301,8 +578,21 @@ func (ps *PipelineState) SelectForCycle(cfg *PipelineConfig) []*EssayState {
 
 	var selected []*EssayState
 	newCount := 0
+	maxContinuing := maxActions
+	if len(newEssays) > 0 && cfg.NewPerCycle > 0 {
+		reserved := cfg.NewPerCycle
+		if reserved > len(newEssays) {
+			reserved = len(newEssays)
+		}
+		if maxContinuing > maxActions-reserved {
+			maxContinuing = maxActions - reserved
+		}
+		if maxContinuing < 0 {
+			maxContinuing = 0
+		}
+	}
 	for _, e := range continuingEssays {
-		if len(selected) >= maxActions {
+		if len(selected) >= maxContinuing {
 			break
 		}
 		selected = append(selected, e)

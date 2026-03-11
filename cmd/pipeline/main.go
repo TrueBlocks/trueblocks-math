@@ -114,6 +114,8 @@ func main() {
 			for _, a := range actions {
 				runner.Log.Println(a)
 			}
+		} else {
+			runner.Log.Println("Cycle: nothing to do")
 		}
 		dash.SetCycleFinished()
 	}
@@ -188,6 +190,7 @@ func main() {
 		case <-ticker.C:
 			dash.SetNextCycleAt(time.Now().Add(time.Duration(interval) * time.Second))
 			if dash.IsPaused() {
+				runner.Log.Println("Cycle: paused")
 				continue
 			}
 			go runCycle()
