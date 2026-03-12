@@ -10,20 +10,65 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 type item struct {
-	Type       string
-	Slug       string
-	Title      string
-	Book       string
-	Part       int
-	PartTitle  string
-	Order      int
-	Hook       string
-	HiddenMath string
-	Arc        string
-	Ending     string
+	Type           string
+	Slug           string
+	Title          string
+	Book           string
+	Part           int
+	PartTitle      string
+	Order          int
+	Hook           string
+	HiddenMath     string
+	Arc            string
+	Ending         string
+	Structure      string
+	Entry          string
+	Register       string
+	Setting        string
+	MathVisibility string
+}
+
+type attrEntry struct {
+	Slug           string `yaml:"slug"`
+	Arc            string `yaml:"arc"`
+	Ending         string `yaml:"ending"`
+	Structure      string `yaml:"structure"`
+	Entry          string `yaml:"entry"`
+	Register       string `yaml:"register"`
+	Setting        string `yaml:"setting"`
+	MathVisibility string `yaml:"math_visibility"`
+}
+
+type attrFile struct {
+	Essays []attrEntry `yaml:"essays"`
+}
+
+func loadAttributes(designDir string) (map[string]attrEntry, error) {
+	pattern := filepath.Join(designDir, "*attributes.yaml")
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		return nil, err
+	}
+	lookup := make(map[string]attrEntry)
+	for _, path := range matches {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("reading %s: %w", path, err)
+		}
+		var af attrFile
+		if err := yaml.Unmarshal(data, &af); err != nil {
+			return nil, fmt.Errorf("parsing %s: %w", path, err)
+		}
+		for _, e := range af.Essays {
+			lookup[e.Slug] = e
+		}
+	}
+	return lookup, nil
 }
 
 func parsePlanFile(path string, bookNum string) ([]item, error) {
@@ -87,7 +132,7 @@ func parsePlanFile(path string, bookNum string) ([]item, error) {
 		}
 
 		cols := splitTableRow(line)
-		if len(cols) < 8 {
+		if len(cols) < 6 {
 			continue
 		}
 
@@ -97,8 +142,14 @@ func parsePlanFile(path string, bookNum string) ([]item, error) {
 		title := strings.TrimSpace(cols[3])
 		hook := strings.TrimSpace(cols[4])
 		hiddenMath := strings.TrimSpace(cols[5])
-		arc := strings.TrimSpace(cols[6])
-		ending := strings.TrimSpace(cols[7])
+		arc := ""
+		ending := ""
+		if len(cols) > 6 {
+			arc = strings.TrimSpace(cols[6])
+		}
+		if len(cols) > 7 {
+			ending = strings.TrimSpace(cols[7])
+		}
 
 		if typ == "" || slug == "" {
 			continue
@@ -202,7 +253,12 @@ func discoverSeries(designDir string) ([]series, error) {
 
 	var result []series
 	for base, plans := range groups {
-		slug := toSlug(base)
+		trimmed := base
+		trimmed = strings.TrimSuffix(trimmed, " Books")
+		trimmed = strings.TrimSuffix(trimmed, " books")
+		trimmed = strings.TrimSuffix(trimmed, " Book")
+		trimmed = strings.TrimSuffix(trimmed, " book")
+		slug := toSlug(trimmed)
 		if hasNumeral[base] {
 			slug += "-books"
 		}
@@ -249,6 +305,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	attrs, err := loadAttributes(designDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading attributes: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Loaded %d attribute entries\n", len(attrs))
+
 	now := time.Now().Format("2006-01-02")
 
 	for _, s := range allSeries {
@@ -265,6 +328,22 @@ func main() {
 		}
 
 		fmt.Printf("Series: %s (%d plan files)\n", s.slug, len(s.plans))
+
+		for i := range items {
+			if a, ok := attrs[items[i].Slug]; ok {
+				if items[i].Arc == "" {
+					items[i].Arc = a.Arc
+				}
+				if items[i].Ending == "" {
+					items[i].Ending = a.Ending
+				}
+				items[i].Structure = a.Structure
+				items[i].Entry = a.Entry
+				items[i].Register = a.Register
+				items[i].Setting = a.Setting
+				items[i].MathVisibility = a.MathVisibility
+			}
+		}
 
 		for _, it := range items {
 			var ideaContent string
@@ -305,22 +384,26 @@ func main() {
 					it.Title, it.Slug, it.Hook, it.HiddenMath, it.Book, it.Part, it.PartTitle, it.Order)
 			}
 
-			arcSlug := toSlug(it.Arc)
-			endingSlug := toSlug(it.Ending)
-
 			metaContent := fmt.Sprintf("slug: %s\n"+
 				"title: \"%s\"\n"+
 				"type: %s\n"+
+				"series: %s\n"+
 				"book: %s\n"+
 				"part: %d\n"+
 				"part_title: \"%s\"\n"+
 				"order: %d\n"+
 				"status: pending\n"+
 				"model: claude-sonnet-4-20250514\n"+
-				"arc: \"%s\"\n"+
-				"ending: \"%s\"\n"+
+				"arc: %s\n"+
+				"ending: %s\n"+
+				"structure: %s\n"+
+				"entry: %s\n"+
+				"register: %s\n"+
+				"setting: \"%s\"\n"+
+				"math_visibility: %s\n"+
 				"created: %s\n",
-				it.Slug, it.Title, it.Type, it.Book, it.Part, it.PartTitle, it.Order, arcSlug, endingSlug, now)
+				it.Slug, it.Title, it.Type, s.slug, it.Book, it.Part, it.PartTitle, it.Order,
+				it.Arc, it.Ending, it.Structure, it.Entry, it.Register, it.Setting, it.MathVisibility, now)
 
 			mdPath := filepath.Join(baseDir, it.Slug+".md")
 			metaPath := filepath.Join(baseDir, it.Slug+".meta.yaml")

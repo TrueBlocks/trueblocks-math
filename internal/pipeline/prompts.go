@@ -142,6 +142,10 @@ WRITING GUIDELINES:
 
 7. **Avoid**: Jargon without explanation, false enthusiasm ("Amazing!"), hedging ("It's kind of like..."), and the word "actually."
 
+8. **Never put a bare number or value on its own line as a paragraph.** No standalone "0.67" or "42" or "∞" as a dramatic hook. Numbers must always appear within a sentence. If you want to open with a striking number, weave it into prose: "The number 0.67 lurks in..." not a naked number on a line by itself. And do NOT bold these numbers — just use them naturally in the sentence without emphasis.
+
+9. **The essay must open with a regular paragraph immediately after the title.** Do not jump straight from the title heading to a section heading. The first thing the reader sees after the title must be body text — an opening paragraph that draws them in.
+
 FORMAT: Markdown with section headers. Use **bold** for emphasis, *italics* for book/paper titles and foreign words. Use $...$ for inline math and $$...$$ for display math.`, title, targetWords, targetWords/265, arcDirective, outlineContent, researchContent, targetWords, targetWords/265)
 }
 
@@ -379,6 +383,10 @@ Your task is to produce a REVISED DRAFT that incorporates all corrections from t
 7. **Keep structure** — maintain the same overall structure and flow unless the report specifically calls for reorganization.
 
 8. **Don't over-correct** — if the fact-check says PASS on something, leave it alone. Only change what was flagged.
+
+9. **No bare numbers as standalone paragraphs.** If the draft has a number sitting alone on its own line as a dramatic hook (e.g., "0.67" or "42"), fold it into the next sentence. Numbers must always appear within prose, without bold emphasis.
+
+10. **The essay must have a regular paragraph immediately after the title.** If the draft jumps from the title heading straight to a section heading with no opening body text, add an introductory paragraph.
 
 OUTPUT: The complete revised essay in markdown with image tags preserved. Do NOT include a changelog or notes about what you changed — just the clean, corrected essay ready for human review.
 

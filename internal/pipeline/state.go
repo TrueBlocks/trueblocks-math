@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -60,6 +61,7 @@ type EssayMeta struct {
 	Slug           string  `yaml:"slug"`
 	Title          string  `yaml:"title"`
 	Type           string  `yaml:"type"`
+	Series         string  `yaml:"series,omitempty"`
 	Book           string  `yaml:"book"`
 	Part           int     `yaml:"part"`
 	PartTitle      string  `yaml:"part_title"`
@@ -86,6 +88,7 @@ type EssayState struct {
 	Slug           string
 	Title          string
 	Type           string
+	Series         string
 	Book           string
 	Part           int
 	PartTitle      string
@@ -138,6 +141,7 @@ type PipelineState struct {
 	CycleCount  int
 	TotalCost   float64
 	SessionCost float64
+	SessionDone int
 	mu          sync.Mutex
 }
 
@@ -196,6 +200,7 @@ func (ps *PipelineState) LoadFromDisk() error {
 					Slug:           meta.Slug,
 					Title:          meta.Title,
 					Type:           meta.Type,
+					Series:         meta.Series,
 					Book:           meta.Book,
 					Part:           meta.Part,
 					PartTitle:      meta.PartTitle,
@@ -217,6 +222,9 @@ func (ps *PipelineState) LoadFromDisk() error {
 			essay.Meta[stage] = &meta
 			if meta.Type != "" {
 				essay.Type = meta.Type
+			}
+			if meta.Series != "" {
+				essay.Series = meta.Series
 			}
 			if meta.Arc != "" {
 				essay.Arc = meta.Arc
@@ -351,6 +359,14 @@ func (ps *PipelineState) ApplyAttributes(designDir string) (int, error) {
 			continue
 		}
 		changed := false
+		if attr.Arc != "" && essay.Arc != attr.Arc {
+			essay.Arc = attr.Arc
+			changed = true
+		}
+		if attr.Ending != "" && essay.Ending != attr.Ending {
+			essay.Ending = attr.Ending
+			changed = true
+		}
 		if attr.Structure != "" && essay.Structure != attr.Structure {
 			essay.Structure = attr.Structure
 			changed = true
@@ -373,6 +389,8 @@ func (ps *PipelineState) ApplyAttributes(designDir string) (int, error) {
 		}
 		if changed {
 			if meta, ok := essay.Meta[StageIdeas]; ok {
+				meta.Arc = essay.Arc
+				meta.Ending = essay.Ending
 				meta.Structure = essay.Structure
 				meta.Entry = essay.Entry
 				meta.Register = essay.Register
@@ -391,16 +409,40 @@ func (ps *PipelineState) ApplyAttributes(designDir string) (int, error) {
 type AccountingEntry struct {
 	Slug       string  `json:"slug"`
 	Stage      string  `json:"stage"`
-	RevertedAt string  `json:"reverted_at"`
-	RevertedTo string  `json:"reverted_to"`
+	Series     string  `json:"series,omitempty"`
+	Book       string  `json:"book,omitempty"`
+	RevertedAt string  `json:"reverted_at,omitempty"`
+	RevertedTo string  `json:"reverted_to,omitempty"`
 	TokensIn   int     `json:"tokens_in,omitempty"`
 	TokensOut  int     `json:"tokens_out,omitempty"`
 	Cost       float64 `json:"cost,omitempty"`
 	Model      string  `json:"model,omitempty"`
+	Count      int     `json:"count,omitempty"`
 }
 
 type AccountingFile struct {
 	Reverted []AccountingEntry `json:"reverted"`
+}
+
+func lockAccounting(path string) (*os.File, error) {
+	lockPath := path + ".lock"
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0644)
+	if err != nil {
+		return nil, fmt.Errorf("opening lock file: %w", err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("acquiring lock: %w", err)
+	}
+	return f, nil
+}
+
+func unlockAccounting(f *os.File) {
+	if f == nil {
+		return
+	}
+	syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	f.Close()
 }
 
 func loadAccounting(path string) (*AccountingFile, error) {
@@ -424,6 +466,38 @@ func saveAccounting(path string, af *AccountingFile) error {
 		return err
 	}
 	return os.WriteFile(path, data, 0644)
+}
+
+func consolidateAccounting(af *AccountingFile) {
+	type key struct{ slug, stage string }
+	merged := make(map[key]*AccountingEntry)
+	var order []key
+	for _, e := range af.Reverted {
+		k := key{e.Slug, e.Stage}
+		if existing, ok := merged[k]; ok {
+			existing.TokensIn += e.TokensIn
+			existing.TokensOut += e.TokensOut
+			existing.Cost += e.Cost
+			if e.Count > 0 {
+				existing.Count += e.Count
+			} else {
+				existing.Count++
+			}
+		} else {
+			copy := e
+			copy.RevertedAt = ""
+			copy.RevertedTo = ""
+			if copy.Count == 0 {
+				copy.Count = 1
+			}
+			merged[k] = &copy
+			order = append(order, k)
+		}
+	}
+	af.Reverted = make([]AccountingEntry, 0, len(order))
+	for _, k := range order {
+		af.Reverted = append(af.Reverted, *merged[k])
+	}
 }
 
 func (ps *PipelineState) accountingPath() string {
@@ -458,6 +532,12 @@ func (ps *PipelineState) RevertToStage(slug string, target Stage) ([]string, err
 	}
 
 	now := nowString()
+	lockFile, lockErr := lockAccounting(ps.accountingPath())
+	if lockErr != nil {
+		return nil, fmt.Errorf("locking accounting: %w", lockErr)
+	}
+	defer unlockAccounting(lockFile)
+
 	af, _ := loadAccounting(ps.accountingPath())
 	if af == nil {
 		af = &AccountingFile{}
@@ -474,6 +554,8 @@ func (ps *PipelineState) RevertToStage(slug string, target Stage) ([]string, err
 				af.Reverted = append(af.Reverted, AccountingEntry{
 					Slug:       slug,
 					Stage:      stage.String(),
+					Series:     ps.Project,
+					Book:       essay.Book,
 					RevertedAt: now,
 					RevertedTo: target.String(),
 					TokensIn:   meta.Tokens,
@@ -495,6 +577,7 @@ func (ps *PipelineState) RevertToStage(slug string, target Stage) ([]string, err
 		delete(essay.Meta, stage)
 	}
 
+	consolidateAccounting(af)
 	saveAccounting(ps.accountingPath(), af)
 
 	exportDir := filepath.Join(ps.BaseDir, "export")

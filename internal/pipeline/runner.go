@@ -682,6 +682,7 @@ func (r *Runner) markInProgress(ps *PipelineState, essay *EssayState, stage Stag
 		Slug:      essay.Slug,
 		Title:     essay.Title,
 		Type:      essay.Type,
+		Series:    essay.Series,
 		Book:      essay.Book,
 		Part:      essay.Part,
 		PartTitle: essay.PartTitle,
@@ -706,6 +707,7 @@ func (r *Runner) markComplete(ps *PipelineState, essay *EssayState, stage Stage,
 		Slug:      essay.Slug,
 		Title:     essay.Title,
 		Type:      essay.Type,
+		Series:    essay.Series,
 		Book:      essay.Book,
 		Part:      essay.Part,
 		PartTitle: essay.PartTitle,
@@ -726,6 +728,9 @@ func (r *Runner) markComplete(ps *PipelineState, essay *EssayState, stage Stage,
 	essay.CurrentStage = stage
 	essay.Status = "final"
 	essay.Meta[stage] = meta
+	if stage == StageExport {
+		ps.SessionDone++
+	}
 	ps.mu.Unlock()
 }
 
@@ -734,6 +739,7 @@ func (r *Runner) markError(ps *PipelineState, essay *EssayState, stage Stage, er
 		Slug:      essay.Slug,
 		Title:     essay.Title,
 		Type:      essay.Type,
+		Series:    essay.Series,
 		Book:      essay.Book,
 		Part:      essay.Part,
 		PartTitle: essay.PartTitle,
@@ -771,6 +777,14 @@ func (r *Runner) TotalCost() float64 {
 	total := 0.0
 	for _, ps := range r.Projects {
 		total += ps.SessionCost
+	}
+	return total
+}
+
+func (r *Runner) SessionDone() int {
+	total := 0
+	for _, ps := range r.Projects {
+		total += ps.SessionDone
 	}
 	return total
 }

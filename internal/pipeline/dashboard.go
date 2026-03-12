@@ -184,6 +184,7 @@ func (d *Dashboard) Start() error {
 	mux.HandleFunc("/api/logs", d.handleLogs)
 	mux.HandleFunc("/api/pause", d.handlePause)
 	mux.HandleFunc("/api/settings", d.handleSettings)
+	mux.HandleFunc("/accounting", d.handleAccounting)
 
 	addr := fmt.Sprintf("127.0.0.1:%d", d.Port)
 	d.Runner.Log.Printf("Dashboard: http://%s", addr)
@@ -206,6 +207,7 @@ type statusResponse struct {
 	Paused            bool                    `json:"paused"`
 	Cycle             int                     `json:"cycle"`
 	TotalCost         float64                 `json:"total_cost"`
+	SessionDone       int                     `json:"session_done"`
 	CycleInterval     int                     `json:"cycle_interval"`
 	SecondsLeft       int                     `json:"seconds_left"`
 	CycleRunning      bool                    `json:"cycle_running"`
@@ -270,7 +272,8 @@ func (d *Dashboard) handleStatus(w http.ResponseWriter, r *http.Request) {
 		Verbose:           d.Runner.Config.Pipeline.Verbose,
 		Paused:            paused,
 		Cycle:             d.Runner.TotalCycles(),
-		TotalCost:         d.Runner.TotalCost() + d.Runner.RevertedCost(),
+		TotalCost:         d.Runner.TotalCost(),
+		SessionDone:       d.Runner.SessionDone(),
 		CycleInterval:     d.CycleInterval,
 		SecondsLeft:       secsLeft,
 		CycleRunning:      running,
@@ -481,6 +484,149 @@ func (d *Dashboard) handleSettings(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, `{"ok":true}`)
 }
 
+func (d *Dashboard) handleAccounting(w http.ResponseWriter, r *http.Request) {
+	var allEntries []AccountingEntry
+	for _, ps := range d.Runner.Projects {
+		af, err := loadAccounting(ps.accountingPath())
+		if err != nil {
+			continue
+		}
+		allEntries = append(allEntries, af.Reverted...)
+
+		ps.mu.Lock()
+		for _, es := range ps.Essays {
+			for stage, meta := range es.Meta {
+				if meta.Cost == 0 {
+					continue
+				}
+				allEntries = append(allEntries, AccountingEntry{
+					Slug:     meta.Slug,
+					Stage:    stage.String(),
+					Book:     meta.Book,
+					TokensIn: meta.Tokens,
+					Cost:     meta.Cost,
+					Model:    meta.Model,
+					Count:    1,
+				})
+			}
+		}
+		ps.mu.Unlock()
+	}
+
+	type row struct {
+		Label               string
+		Runs                int
+		TokensIn, TokensOut int
+		Cost                float64
+		AvgCost             float64
+	}
+
+	aggregate := func(entries []AccountingEntry, keyFn func(AccountingEntry) string, order []string) []row {
+		m := make(map[string]*row)
+		for _, e := range entries {
+			k := keyFn(e)
+			r, ok := m[k]
+			if !ok {
+				r = &row{Label: k}
+				m[k] = r
+			}
+			cnt := e.Count
+			if cnt == 0 {
+				cnt = 1
+			}
+			r.Runs += cnt
+			r.TokensIn += e.TokensIn
+			r.TokensOut += e.TokensOut
+			r.Cost += e.Cost
+		}
+		var rows []row
+		seen := make(map[string]bool)
+		for _, k := range order {
+			if r, ok := m[k]; ok {
+				if r.Runs > 0 {
+					r.AvgCost = r.Cost / float64(r.Runs)
+				}
+				rows = append(rows, *r)
+				seen[k] = true
+			}
+		}
+		for k, r := range m {
+			if !seen[k] {
+				if r.Runs > 0 {
+					r.AvgCost = r.Cost / float64(r.Runs)
+				}
+				rows = append(rows, *r)
+			}
+		}
+		var total row
+		total.Label = "Total"
+		for _, r := range rows {
+			total.Runs += r.Runs
+			total.TokensIn += r.TokensIn
+			total.TokensOut += r.TokensOut
+			total.Cost += r.Cost
+		}
+		if total.Runs > 0 {
+			total.AvgCost = total.Cost / float64(total.Runs)
+		}
+		rows = append(rows, total)
+		return rows
+	}
+
+	stageOrder := []string{"seed", "ideas", "research", "outline", "draft", "factcheck", "illustrate", "draft2", "export"}
+	bookOrder := []string{"I", "II", "III"}
+
+	byStage := aggregate(allEntries, func(e AccountingEntry) string { return e.Stage }, stageOrder)
+	byBook := aggregate(allEntries, func(e AccountingEntry) string { return e.Book }, bookOrder)
+
+	type bookStageGroup struct {
+		Book string
+		Rows []row
+	}
+	var byBookStage []bookStageGroup
+	bookEntries := make(map[string][]AccountingEntry)
+	for _, e := range allEntries {
+		bookEntries[e.Book] = append(bookEntries[e.Book], e)
+	}
+	var grandTotal row
+	grandTotal.Label = "Grand Total"
+	for _, b := range bookOrder {
+		entries := bookEntries[b]
+		if len(entries) == 0 {
+			continue
+		}
+		rows := aggregate(entries, func(e AccountingEntry) string { return e.Stage }, stageOrder)
+		for _, r := range rows {
+			if r.Label == "Total" {
+				grandTotal.Runs += r.Runs
+				grandTotal.TokensIn += r.TokensIn
+				grandTotal.TokensOut += r.TokensOut
+				grandTotal.Cost += r.Cost
+			}
+		}
+		byBookStage = append(byBookStage, bookStageGroup{Book: b, Rows: rows})
+	}
+	if grandTotal.Runs > 0 {
+		grandTotal.AvgCost = grandTotal.Cost / float64(grandTotal.Runs)
+	}
+
+	data := struct {
+		ByStage     []row
+		ByBook      []row
+		ByBookStage []bookStageGroup
+		GrandTotal  row
+		EntryCount  int
+	}{byStage, byBook, byBookStage, grandTotal, len(allEntries)}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	tmpl, err := template.New("accounting").Parse(accountingHTML)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	tmpl.Execute(w, data)
+}
+
 func (d *Dashboard) handleRevert(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -536,7 +682,11 @@ func (d *Dashboard) handleDiskStats(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			for _, e := range entries {
-				ext := filepath.Ext(e.Name())
+				name := e.Name()
+				if strings.HasPrefix(name, "~$") {
+					continue
+				}
+				ext := filepath.Ext(name)
 				if ext == ".md" || ext == ".docx" {
 					counts[stage]++
 				}
@@ -547,7 +697,7 @@ func (d *Dashboard) handleDiskStats(w http.ResponseWriter, r *http.Request) {
 	totalCost := 0.0
 	for _, ps := range d.Runner.Projects {
 		ps.mu.Lock()
-		totalCost += ps.TotalCost + ps.SessionCost + ps.RevertedCost()
+		totalCost += ps.TotalCost + ps.RevertedCost()
 		ps.mu.Unlock()
 	}
 
@@ -563,6 +713,7 @@ type essayJSON struct {
 	Slug           string `json:"slug"`
 	Title          string `json:"title"`
 	Type           string `json:"type"`
+	Series         string `json:"series,omitempty"`
 	Book           string `json:"book"`
 	Part           int    `json:"part"`
 	PartTitle      string `json:"part_title"`
@@ -586,12 +737,17 @@ type essayJSON struct {
 func (d *Dashboard) handleEssays(w http.ResponseWriter, r *http.Request) {
 	projectFilter := r.URL.Query().Get("project")
 
+	debugBook, debugPart, debugOrder, debugActive := ParseDebug(d.Runner.Config.Pipeline.Debug)
+
 	var essays []essayJSON
 	for _, ps := range d.Runner.Projects {
 		if projectFilter != "" && ps.Project != projectFilter {
 			continue
 		}
 		for _, e := range ps.SnapshotEssays() {
+			if debugActive && !(e.Book == debugBook && e.Part == debugPart && e.Order == debugOrder) {
+				continue
+			}
 			stage := e.CurrentStage.String()
 			status := e.Status
 			if e.IsDone() {
@@ -641,6 +797,7 @@ func (d *Dashboard) handleEssays(w http.ResponseWriter, r *http.Request) {
 				Slug:           e.Slug,
 				Title:          e.Title,
 				Type:           e.Type,
+				Series:         e.Series,
 				Book:           e.Book,
 				Part:           e.Part,
 				PartTitle:      e.PartTitle,
@@ -840,6 +997,7 @@ const dashboardHTML = `<!DOCTYPE html>
 <div class="layout">
 <div class="main-panel">
   <h1>Pipeline Dashboard <span id="mode" class="mode dry">DRY RUN</span></h1>
+  <div style="margin-bottom:8px"><a href="/accounting" style="color:#e94560;font-size:0.85rem;text-decoration:none;border:1px solid #2a2a4e;padding:4px 12px;border-radius:4px;background:#16213e">Accounting &rarr;</a></div>
   <div class="subtitle" id="subtitle">Loading...</div>
   <div id="retryBanner" class="retry-banner" style="display:none"></div>
 
@@ -1011,7 +1169,7 @@ async function refresh() {
   document.getElementById('draft').textContent = s.summary.draft || 0;
   document.getElementById('factcheck').textContent = s.summary.factcheck || 0;
   document.getElementById('draft2').textContent = s.summary.draft2 || 0;
-  document.getElementById('done').textContent = s.summary.done || 0;
+  document.getElementById('done').textContent = s.session_done || 0;
   document.getElementById('cost').textContent = '$' + s.total_cost.toFixed(2);
   document.getElementById('cycle').textContent = s.cycle;
   var mode = document.getElementById('mode');
@@ -1045,7 +1203,7 @@ async function refresh() {
     '<td>' + idStr + '</td>' +
     '<td>' + esc(e.type || 'essay') + '</td>' +
     '<td>' + revertDropdown(e) + '</td>' +
-    '<td><a href="#" onclick="openFolder(\x27' + encodeURIComponent(e.project) + '\x27,\x27' + encodeURIComponent(e.slug) + '\x27);return false" style="color:#e94560;text-decoration:none">' + (e.stale ? '<span title="Attributes newer than content" style="color:#ff6b6b;font-size:0.5em;vertical-align:middle;margin-right:3px">\u25cf</span>' : '') + esc(e.title) + '</a></td>' +
+    '<td><a href="#" onclick="' + (e.has_docx ? 'openDocx' : 'openFolder') + '(\x27' + encodeURIComponent(e.project) + '\x27,\x27' + encodeURIComponent(e.slug) + '\x27);return false" style="color:#e94560;text-decoration:none">' + (e.stale ? '<span title="Attributes newer than content" style="color:#ff6b6b;font-size:0.5em;vertical-align:middle;margin-right:3px">\u25cf</span>' : '') + esc(e.title) + '</a></td>' +
     '<td><span class="stage-badge stage-' + e.stage + '">' + e.stage + '</span></td>' +
     '<td title="' + attrTooltip(e) + '">' + attrCompact(e) + '</td>' +
     '<td>' + lenStr + '</td>' +
@@ -1190,5 +1348,84 @@ setInterval(function() { if (!refreshPaused) refresh(); }, 1000);
 setInterval(refreshLogs, 500);
 setInterval(refreshDiskStats, 10000);
 </script>
+</body>
+</html>`
+
+const accountingHTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pipeline Accounting</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+         background: #1a1a2e; color: #e0e0e0; padding: 24px; max-width: 1200px; margin: 0 auto; }
+  h1 { color: #e94560; margin-bottom: 4px; font-size: 1.5rem; }
+  .subtitle { color: #8899aa; font-size: 0.85rem; margin-bottom: 20px; }
+  .nav-link { color: #e94560; font-size: 0.85rem; text-decoration: none;
+              border: 1px solid #2a2a4e; padding: 4px 12px; border-radius: 4px;
+              background: #16213e; display: inline-block; margin-bottom: 16px; }
+  .nav-link:hover { border-color: #e94560; }
+  h2 { color: #e94560; font-size: 1.1rem; margin: 24px 0 8px; }
+  h3 { color: #8899aa; font-size: 0.9rem; margin: 16px 0 6px; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
+  th { text-align: left; padding: 8px 12px; background: #16213e; color: #8899aa;
+       font-size: 0.75rem; text-transform: uppercase; letter-spacing: 1px; }
+  th.num { text-align: right; }
+  td { padding: 6px 12px; border-bottom: 1px solid #1a1a3e; font-size: 0.85rem; }
+  td.num { text-align: right; font-family: "SF Mono", Monaco, monospace; font-size: 0.8rem; }
+  tr:hover td { background: #16213e; }
+  tr.total-row td { border-top: 2px solid #2a2a4e; font-weight: bold; color: #e94560; }
+  tr.grand-total td { border-top: 3px solid #e94560; font-weight: bold; color: #e94560; font-size: 0.9rem; }
+  .cost { color: #ff9800; }
+</style>
+</head>
+<body>
+<a href="/" class="nav-link">&larr; Dashboard</a>
+<h1>Pipeline Accounting</h1>
+<div class="subtitle">{{.EntryCount}} consolidated entries across all projects</div>
+
+<h2>By Book</h2>
+<table>
+<thead><tr><th>Book</th><th class="num">Runs</th><th class="num">Tokens In</th><th class="num">Tokens Out</th><th class="num">Cost</th><th class="num">Avg Cost</th></tr></thead>
+<tbody>
+{{range .ByBook}}<tr{{if eq .Label "Total"}} class="total-row"{{end}}>
+<td>{{.Label}}</td><td class="num">{{.Runs}}</td><td class="num">{{.TokensIn}}</td><td class="num">{{.TokensOut}}</td><td class="num cost">${{printf "%.2f" .Cost}}</td><td class="num cost">${{printf "%.4f" .AvgCost}}</td>
+</tr>{{end}}
+</tbody>
+</table>
+
+<h2>By Stage</h2>
+<table>
+<thead><tr><th>Stage</th><th class="num">Runs</th><th class="num">Tokens In</th><th class="num">Tokens Out</th><th class="num">Cost</th><th class="num">Avg Cost</th></tr></thead>
+<tbody>
+{{range .ByStage}}<tr{{if eq .Label "Total"}} class="total-row"{{end}}>
+<td>{{.Label}}</td><td class="num">{{.Runs}}</td><td class="num">{{.TokensIn}}</td><td class="num">{{.TokensOut}}</td><td class="num cost">${{printf "%.2f" .Cost}}</td><td class="num cost">${{printf "%.4f" .AvgCost}}</td>
+</tr>{{end}}
+</tbody>
+</table>
+
+<h2>By Book &times; Stage</h2>
+{{range .ByBookStage}}
+<h3>Book {{.Book}}</h3>
+<table>
+<thead><tr><th>Stage</th><th class="num">Runs</th><th class="num">Tokens In</th><th class="num">Tokens Out</th><th class="num">Cost</th><th class="num">Avg Cost</th></tr></thead>
+<tbody>
+{{range .Rows}}<tr{{if eq .Label "Total"}} class="total-row"{{end}}>
+<td>{{.Label}}</td><td class="num">{{.Runs}}</td><td class="num">{{.TokensIn}}</td><td class="num">{{.TokensOut}}</td><td class="num cost">${{printf "%.2f" .Cost}}</td><td class="num cost">${{printf "%.4f" .AvgCost}}</td>
+</tr>{{end}}
+</tbody>
+</table>
+{{end}}
+
+<table>
+<thead><tr><th>Grand Total</th><th class="num">Runs</th><th class="num">Tokens In</th><th class="num">Tokens Out</th><th class="num">Cost</th><th class="num">Avg Cost</th></tr></thead>
+<tbody>
+<tr class="grand-total">
+<td>All Books</td><td class="num">{{.GrandTotal.Runs}}</td><td class="num">{{.GrandTotal.TokensIn}}</td><td class="num">{{.GrandTotal.TokensOut}}</td><td class="num cost">${{printf "%.2f" .GrandTotal.Cost}}</td><td class="num cost">${{printf "%.4f" .GrandTotal.AvgCost}}</td>
+</tr>
+</tbody>
+</table>
 </body>
 </html>`
