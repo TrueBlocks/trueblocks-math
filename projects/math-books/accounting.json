@@ -1,0 +1,44 @@
+{
+  "reverted": [
+    {
+      "slug": "soap-bubbles",
+      "stage": "research",
+      "series": "math-books",
+      "book": "I",
+      "tokens_in": 3049,
+      "cost": 0.038319,
+      "model": "claude-sonnet-4-20250514",
+      "count": 1
+    },
+    {
+      "slug": "soap-bubbles",
+      "stage": "outline",
+      "series": "math-books",
+      "book": "I",
+      "tokens_in": 4824,
+      "cost": 0.030696,
+      "model": "claude-sonnet-4-20250514",
+      "count": 1
+    },
+    {
+      "slug": "soap-bubbles",
+      "stage": "draft",
+      "series": "math-books",
+      "book": "I",
+      "tokens_in": 9702,
+      "cost": 0.072342,
+      "model": "claude-sonnet-4-20250514",
+      "count": 1
+    },
+    {
+      "slug": "soap-bubbles",
+      "stage": "factcheck",
+      "series": "math-books",
+      "book": "I",
+      "tokens_in": 7885,
+      "cost": 0.041655000000000005,
+      "model": "claude-sonnet-4-20250514",
+      "count": 1
+    }
+  ]
+}

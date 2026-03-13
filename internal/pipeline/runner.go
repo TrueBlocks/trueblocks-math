@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log"
@@ -12,6 +13,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"text/template"
 	"time"
 )
 
@@ -21,15 +23,21 @@ type docxJob struct {
 }
 
 type Runner struct {
-	Config     *Config
-	Projects   []*PipelineState
-	Client     *AnthropicClient
-	Log        *log.Logger
-	BaseDir    string
-	ConfigPath string
-	CLIDryRun  bool
-	docxCh     chan docxJob
-	docxWg     sync.WaitGroup
+	Config            *Config
+	Projects          []*PipelineState
+	Client            *AnthropicClient
+	Log               *log.Logger
+	BaseDir           string
+	ConfigPath        string
+	CLIDryRun         bool
+	VoiceProfile      string
+	VoiceAntiPatterns string
+	DraftRules        string
+	RevisionRules     string
+	PromptTemplates   map[string]*template.Template
+	Examples          map[string]string
+	docxCh            chan docxJob
+	docxWg            sync.WaitGroup
 }
 
 func NewRunner(cfg *Config, baseDir string) *Runner {
@@ -174,8 +182,148 @@ func (r *Runner) ReloadConfig() {
 	r.Client.APIKey = r.Config.API.AnthropicKey
 }
 
+func (r *Runner) loadSpecs() {
+	voicePath := filepath.Join(r.BaseDir, "specs", "voice-summary.md")
+	data, err := os.ReadFile(voicePath)
+	if err != nil {
+		r.Log.Printf("Voice summary load failed: %v (keeping previous)", err)
+	} else {
+		full := string(data)
+		r.VoiceProfile = full
+
+		const antiHeader = "## What This Voice Does NOT Do"
+		idx := strings.Index(full, antiHeader)
+		if idx >= 0 {
+			section := full[idx:]
+			if end := strings.Index(section[len(antiHeader):], "\n---"); end >= 0 {
+				section = section[:len(antiHeader)+end]
+			}
+			r.VoiceAntiPatterns = strings.TrimSpace(section)
+		}
+	}
+
+	rulesPath := filepath.Join(r.BaseDir, "specs", "essay-rules.md")
+	data, err = os.ReadFile(rulesPath)
+	if err != nil {
+		r.Log.Printf("Essay rules load failed: %v (keeping previous)", err)
+	} else {
+		full := string(data)
+		r.DraftRules = extractSection(full, "## Draft Guidelines")
+		r.RevisionRules = extractSection(full, "## Revision Rules")
+	}
+
+	promptDir := filepath.Join(r.BaseDir, "specs", "prompts")
+	entries, err := os.ReadDir(promptDir)
+	if err != nil {
+		r.Log.Printf("Prompt templates load failed: %v (keeping previous)", err)
+		return
+	}
+	templates := make(map[string]*template.Template)
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".md" {
+			continue
+		}
+		name := strings.TrimSuffix(e.Name(), ".md")
+		content, err := os.ReadFile(filepath.Join(promptDir, e.Name()))
+		if err != nil {
+			r.Log.Printf("WARNING: could not read prompt template '%s': %v", name, err)
+			continue
+		}
+		tmpl, err := template.New(name).Parse(string(content))
+		if err != nil {
+			r.Log.Printf("WARNING: could not parse prompt template '%s': %v", name, err)
+			continue
+		}
+		templates[name] = tmpl
+	}
+	r.PromptTemplates = templates
+
+	exampleDir := filepath.Join(r.BaseDir, "specs", "examples")
+	examples := make(map[string]string)
+	exFiles, err := os.ReadDir(exampleDir)
+	if err != nil {
+		r.Log.Printf("Examples dir load failed: %v (keeping previous)", err)
+	} else {
+		for _, f := range exFiles {
+			if f.IsDir() || filepath.Ext(f.Name()) != ".md" {
+				continue
+			}
+			category := strings.TrimSuffix(f.Name(), ".md")
+			content, err := os.ReadFile(filepath.Join(exampleDir, f.Name()))
+			if err != nil {
+				r.Log.Printf("WARNING: could not read examples '%s': %v", category, err)
+				continue
+			}
+			for k, v := range splitExamples(category, string(content)) {
+				examples[k] = v
+			}
+		}
+		r.Examples = examples
+	}
+}
+
+func (r *Runner) executePrompt(name string, data map[string]any) string {
+	tmpl, ok := r.PromptTemplates[name]
+	if !ok {
+		r.Log.Printf("WARNING: prompt template '%s' not found", name)
+		return ""
+	}
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, data); err != nil {
+		r.Log.Printf("ERROR executing prompt template '%s': %v", name, err)
+		return ""
+	}
+	return buf.String()
+}
+
+func (r *Runner) buildExamples(keys ...string) string {
+	var parts []string
+	for _, key := range keys {
+		if ex, ok := r.Examples[key]; ok && ex != "" {
+			parts = append(parts, ex)
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "\n## REFERENCE EXAMPLES (for this essay's attributes)\n\nStudy these examples. They show the level of craft expected for this specific combination of attributes. Adapt the techniques — do not copy.\n\n" + strings.Join(parts, "\n\n---\n\n") + "\n"
+}
+
+func extractSection(content, header string) string {
+	idx := strings.Index(content, header)
+	if idx < 0 {
+		return ""
+	}
+	section := content[idx+len(header):]
+	if end := strings.Index(section, "\n---"); end >= 0 {
+		section = section[:end]
+	}
+	return strings.TrimSpace(section)
+}
+
+func splitExamples(category, content string) map[string]string {
+	result := make(map[string]string)
+	sections := strings.Split(content, "\n## ")
+	for i, sec := range sections {
+		if i == 0 {
+			continue
+		}
+		newline := strings.IndexByte(sec, '\n')
+		if newline < 0 {
+			continue
+		}
+		name := strings.TrimSpace(sec[:newline])
+		body := strings.TrimSpace(sec[newline+1:])
+		if body != "" {
+			result[category+"/"+name] = body
+		}
+	}
+	return result
+}
+
 func (r *Runner) RunCycle(ctx context.Context) ([]string, error) {
 	r.ReloadConfig()
+	r.loadSpecs()
 	var allActions []string
 	for _, ps := range r.Projects {
 		if ctx.Err() != nil {
@@ -333,7 +481,7 @@ func (r *Runner) processEssay(ctx context.Context, ps *PipelineState, essay *Ess
 		}
 		result, err = r.Client.Call(ctx, model, prompt, timeout)
 		if err != nil {
-			return err
+			return fmt.Errorf("%s/%s: %w", essay.Slug, targetStage, err)
 		}
 		r.Log.Printf("    tokens: %d in / %d out, cost: $%.4f",
 			result.InputTokens, result.OutputTokens, result.Cost)
@@ -590,20 +738,20 @@ func (r *Runner) buildPrompt(ps *PipelineState, essay *EssayState, targetStage S
 		if len(ideaContent) > 0 {
 			hook = ideaContent
 		}
-		prompt = ResearchPrompt(ideaMeta.Title, hook, hiddenMath, essay.Setting)
+		prompt = r.researchPrompt(ideaMeta.Title, hook, hiddenMath, essay.Setting)
 
 	case StageOutline:
 		model = r.Config.Models.Outline
 		if essay.Type == "introduction" {
 			ideaContent := readContent(StageIdeas)
-			prompt = IntroOutlinePrompt(ideaMeta.Title, ideaContent)
+			prompt = r.introOutlinePrompt(ideaMeta.Title, ideaContent)
 		} else {
 			research := readContent(StageResearch)
 			arc, _ := ArcByName(essay.Arc)
 			structure, _ := StructureByName(essay.Structure)
 			entry, _ := EntryByName(essay.Entry)
 			mathVis, _ := MathVisByName(essay.MathVisibility)
-			prompt = OutlinePrompt(ideaMeta.Title, research, targetWords, arc, structure, entry, mathVis)
+			prompt = r.outlinePrompt(ideaMeta.Title, research, targetWords, arc, structure, entry, mathVis)
 		}
 
 	case StageDraft:
@@ -611,7 +759,7 @@ func (r *Runner) buildPrompt(ps *PipelineState, essay *EssayState, targetStage S
 		if essay.Type == "introduction" {
 			outline := readContent(StageOutline)
 			ideaContent := readContent(StageIdeas)
-			prompt = IntroDraftPrompt(ideaMeta.Title, outline, ideaContent)
+			prompt = r.introDraftPrompt(ideaMeta.Title, outline, ideaContent)
 		} else {
 			outline := readContent(StageOutline)
 			research := readContent(StageResearch)
@@ -620,30 +768,30 @@ func (r *Runner) buildPrompt(ps *PipelineState, essay *EssayState, targetStage S
 			entry, _ := EntryByName(essay.Entry)
 			register, _ := RegisterByName(essay.Register)
 			mathVis, _ := MathVisByName(essay.MathVisibility)
-			prompt = DraftPrompt(ideaMeta.Title, outline, research, targetWords, arc, structure, entry, register, essay.Setting, mathVis)
+			prompt = r.draftPrompt(ideaMeta.Title, outline, research, targetWords, arc, structure, entry, register, essay.Setting, mathVis)
 		}
 
 	case StageFactcheck:
 		model = r.Config.Models.Factcheck
 		draft := readContent(StageDraft)
 		research := readContent(StageResearch)
-		prompt = FactcheckPrompt(ideaMeta.Title, draft, research)
+		prompt = r.factcheckPrompt(ideaMeta.Title, draft, research)
 
 	case StageDraft2:
 		model = r.Config.Models.Draft2
 		if essay.Type == "section" {
 			ideaContent := readContent(StageIdeas)
-			prompt = SectionDraft2Prompt(ideaMeta.Title, ideaContent, ideaMeta.PartTitle)
+			prompt = r.sectionDraft2Prompt(ideaMeta.Title, ideaContent, ideaMeta.PartTitle)
 		} else if essay.Type == "introduction" {
 			draft := readContent(StageDraft)
-			prompt = IntroDraft2Prompt(ideaMeta.Title, draft)
+			prompt = r.introDraft2Prompt(ideaMeta.Title, draft)
 		} else {
 			draft := readContent(StageDraft)
 			factcheck := readContent(StageFactcheck)
 			illustrate := readContent(StageIllustrate)
 			arc, _ := ArcByName(essay.Arc)
 			register, _ := RegisterByName(essay.Register)
-			prompt = Draft2Prompt(ideaMeta.Title, draft, factcheck, illustrate, targetWords, arc, register)
+			prompt = r.draft2Prompt(ideaMeta.Title, draft, factcheck, illustrate, targetWords, arc, register)
 		}
 
 	case StageIllustrate:
@@ -651,7 +799,7 @@ func (r *Runner) buildPrompt(ps *PipelineState, essay *EssayState, targetStage S
 		draft := readContent(StageDraft)
 		factcheck := readContent(StageFactcheck)
 		mathVis, _ := MathVisByName(essay.MathVisibility)
-		prompt = IllustratePrompt(ideaMeta.Title, draft, factcheck, essay.Slug, essay.Setting, mathVis)
+		prompt = r.illustratePrompt(ideaMeta.Title, draft, factcheck, essay.Slug, essay.Setting, mathVis)
 
 	default:
 		return "", "", fmt.Errorf("unknown target stage: %s", targetStage)
@@ -719,7 +867,8 @@ func (r *Runner) markComplete(ps *PipelineState, essay *EssayState, stage Stage,
 		Created:   essay.Meta[StageIdeas].Created,
 		Started:   nowString(),
 		Completed: nowString(),
-		Tokens:    result.InputTokens + result.OutputTokens,
+		Tokens:    result.InputTokens,
+		TokensOut: result.OutputTokens,
 		Cost:      result.Cost,
 	}
 	ps.WriteMeta(stage, meta)

@@ -79,6 +79,7 @@ type EssayMeta struct {
 	Started        string  `yaml:"started,omitempty"`
 	Completed      string  `yaml:"completed,omitempty"`
 	Tokens         int     `yaml:"tokens,omitempty"`
+	TokensOut      int     `yaml:"tokens_out,omitempty"`
 	Cost           float64 `yaml:"cost,omitempty"`
 	Error          string  `yaml:"error,omitempty"`
 	Retries        int     `yaml:"retries,omitempty"`
@@ -559,6 +560,7 @@ func (ps *PipelineState) RevertToStage(slug string, target Stage) ([]string, err
 					RevertedAt: now,
 					RevertedTo: target.String(),
 					TokensIn:   meta.Tokens,
+					TokensOut:  meta.TokensOut,
 					Cost:       meta.Cost,
 					Model:      meta.Model,
 				})

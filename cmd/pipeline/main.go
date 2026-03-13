@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -103,7 +104,12 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	var cycleMu sync.Mutex
 	runCycle := func() {
+		if !cycleMu.TryLock() {
+			return
+		}
+		defer cycleMu.Unlock()
 		dash.SetCycleRunning()
 		actions, err := runner.RunCycle(ctx)
 		if err != nil && ctx.Err() == nil {

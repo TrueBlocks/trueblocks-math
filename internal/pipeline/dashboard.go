@@ -180,6 +180,7 @@ func (d *Dashboard) Start() error {
 
 	mux.HandleFunc("/api/open-docx", d.handleOpenDocx)
 	mux.HandleFunc("/api/revert", d.handleRevert)
+	mux.HandleFunc("/api/revert-all", d.handleRevertAll)
 	mux.HandleFunc("/api/disk-stats", d.handleDiskStats)
 	mux.HandleFunc("/api/logs", d.handleLogs)
 	mux.HandleFunc("/api/pause", d.handlePause)
@@ -500,13 +501,14 @@ func (d *Dashboard) handleAccounting(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 				allEntries = append(allEntries, AccountingEntry{
-					Slug:     meta.Slug,
-					Stage:    stage.String(),
-					Book:     meta.Book,
-					TokensIn: meta.Tokens,
-					Cost:     meta.Cost,
-					Model:    meta.Model,
-					Count:    1,
+					Slug:      meta.Slug,
+					Stage:     stage.String(),
+					Book:      meta.Book,
+					TokensIn:  meta.Tokens,
+					TokensOut: meta.TokensOut,
+					Cost:      meta.Cost,
+					Model:     meta.Model,
+					Count:     1,
 				})
 			}
 		}
@@ -668,6 +670,61 @@ func (d *Dashboard) handleRevert(w http.ResponseWriter, r *http.Request) {
 		Ok      bool     `json:"ok"`
 		Removed []string `json:"removed"`
 	}{Ok: true, Removed: removed})
+}
+
+func (d *Dashboard) handleRevertAll(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+
+	project := r.URL.Query().Get("project")
+	stage := r.URL.Query().Get("stage")
+	if project == "" || stage == "" {
+		http.Error(w, "project and stage required", http.StatusBadRequest)
+		return
+	}
+
+	target := StageFromString(stage)
+
+	var ps *PipelineState
+	for _, p := range d.Runner.Projects {
+		if p.Project == project {
+			ps = p
+			break
+		}
+	}
+	if ps == nil {
+		http.Error(w, "project not found", http.StatusNotFound)
+		return
+	}
+
+	var slugs []string
+	ps.mu.Lock()
+	for slug := range ps.Essays {
+		slugs = append(slugs, slug)
+	}
+	ps.mu.Unlock()
+
+	reverted := 0
+	var errors []string
+	for _, slug := range slugs {
+		_, err := ps.RevertToStage(slug, target)
+		if err != nil {
+			errors = append(errors, slug+": "+err.Error())
+			continue
+		}
+		reverted++
+	}
+
+	d.Runner.Log.Printf("[%s] REVERT-ALL to %s (%d reverted, %d errors)", project, stage, reverted, len(errors))
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(struct {
+		Ok       bool     `json:"ok"`
+		Reverted int      `json:"reverted"`
+		Errors   []string `json:"errors,omitempty"`
+	}{Ok: len(errors) == 0, Reverted: reverted, Errors: errors})
 }
 
 func (d *Dashboard) handleDiskStats(w http.ResponseWriter, r *http.Request) {
@@ -843,21 +900,21 @@ func (d *Dashboard) handleEssays(w http.ResponseWriter, r *http.Request) {
 
 func stageRank(stage string) int {
 	switch stage {
-	case "ideas":
-		return 0
 	case "research":
-		return 1
+		return 0
 	case "outline":
-		return 2
+		return 1
 	case "draft":
-		return 3
+		return 2
 	case "factcheck":
-		return 4
+		return 3
 	case "illustrate":
-		return 5
+		return 4
 	case "draft2":
-		return 6
+		return 5
 	case "export":
+		return 6
+	case "ideas":
 		return 7
 	case "done":
 		return 8
@@ -1047,6 +1104,24 @@ const dashboardHTML = `<!DOCTYPE html>
     </thead>
     <tbody id="essayTable"></tbody>
   </table>
+  <div style="height:48px"></div>
+
+  <div id="globalRevertFooter" style="position:sticky;bottom:0;background:#0f0f23;border-top:2px solid #2a2a4e;padding:10px 16px;display:flex;align-items:center;gap:12px;z-index:100;margin-top:12px;box-shadow:0 -4px 12px rgba(0,0,0,0.5)">
+    <span style="color:#8899aa;font-size:0.8rem;text-transform:uppercase;letter-spacing:1px">Global Revert:</span>
+    <select id="globalRevertSelect" style="background:#16213e;color:#e0e0e0;border:1px solid #2a2a4e;border-radius:4px;font-size:0.8rem;padding:4px 8px;cursor:pointer">
+      <option value="">Select stage...</option>
+      <option value="ideas">ideas</option>
+      <option value="research">research</option>
+      <option value="outline">outline</option>
+      <option value="draft">draft</option>
+      <option value="factcheck">factcheck</option>
+      <option value="illustrate">illustrate</option>
+      <option value="draft2">draft2</option>
+      <option value="export">export</option>
+    </select>
+    <button class="btn" style="padding:6px 16px;font-size:0.8rem" onclick="doGlobalRevert()">Revert All</button>
+    <span id="globalRevertStatus" style="color:#8899aa;font-size:0.8rem"></span>
+  </div>
 </div>
 
 <div class="log-panel">
@@ -1075,6 +1150,7 @@ const dashboardHTML = `<!DOCTYPE html>
 <script>
 let cycleInterval = 15, secondsLeft = 15, activeProject = '', isRunning = false, isPaused = true;
 let verbose = false;
+var lastEssays = [];
 const circ = 2 * Math.PI * 22;
 
 function updateRing() {
@@ -1194,6 +1270,7 @@ async function refresh() {
 
   var url = activeProject ? '/api/essays?project=' + encodeURIComponent(activeProject) : '/api/essays';
   var essays = await fetch(url).then(function(r) { return r.json(); });
+  lastEssays = essays || [];
   var tbody = document.getElementById('essayTable');
   tbody.innerHTML = (essays||[]).map(function(e) {
     var idStr = e.book + '.' + e.part + '.' + e.order;
@@ -1268,6 +1345,32 @@ function showRevertModal(msg) {
       resolve(ok);
     };
   });
+}
+async function doGlobalRevert() {
+  var sel = document.getElementById('globalRevertSelect');
+  var stage = sel.value;
+  if (!stage) { alert('Select a stage first'); return; }
+  var project = activeProject;
+  if (!project && lastEssays.length > 0) project = lastEssays[0].project;
+  if (!project) { alert('No project found'); return; }
+  var ok = await showRevertModal('Revert ALL works in ' + project + ' to ' + stage + '? Files from ' + stage + ' onward will be deleted for every essay.');
+  if (!ok) return;
+  var status = document.getElementById('globalRevertStatus');
+  status.textContent = 'Reverting...';
+  status.style.color = '#ff9800';
+  var res = await fetch('/api/revert-all?project=' + encodeURIComponent(project) + '&stage=' + encodeURIComponent(stage), { method: 'POST' });
+  var data = await res.json();
+  if (data.ok) {
+    status.textContent = data.reverted + ' reverted';
+    status.style.color = '#4caf50';
+  } else {
+    status.textContent = data.reverted + ' reverted, ' + (data.errors ? data.errors.length : 0) + ' errors';
+    status.style.color = '#f44336';
+  }
+  sel.value = '';
+  refresh();
+  refreshDiskStats();
+  setTimeout(function() { status.textContent = ''; }, 5000);
 }
 async function doRevert(project, slug, sel) {
   var stage = sel.value;
