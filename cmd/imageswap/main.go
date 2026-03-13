@@ -119,6 +119,11 @@ func swapImages(docxPath, imagesDir, slugOverride string) error {
 			if target != "" {
 				zipPath := "word/" + target
 				mediaFiles[zipPath] = pngPath
+
+				// Also update the image dimensions in the existing drawing XML
+				cx, cy := pngDimensionsEMU(pngPath)
+				docXML = updateExistingImageDimensions(docXML, existingRID, cx, cy)
+
 				log.Printf("  updating %s <- %s", zipPath, filename)
 				modified = true
 			}
@@ -315,6 +320,41 @@ func findExistingImageRID(docXML, filename string) string {
 	return m[1]
 }
 
+// updateExistingImageDimensions finds the drawing paragraph associated with rID
+// and updates both wp:extent and a:ext cx/cy values to the correct dimensions.
+func updateExistingImageDimensions(docXML, rID string, cx, cy int64) string {
+	rIDAttr := fmt.Sprintf(`r:embed="%s"`, rID)
+	rIDIdx := strings.Index(docXML, rIDAttr)
+	if rIDIdx < 0 {
+		return docXML
+	}
+
+	// Find the enclosing <w:drawing>...</w:drawing>
+	drawStart := strings.LastIndex(docXML[:rIDIdx], "<w:drawing>")
+	if drawStart < 0 {
+		return docXML
+	}
+	drawEnd := strings.Index(docXML[drawStart:], "</w:drawing>")
+	if drawEnd < 0 {
+		return docXML
+	}
+	drawEnd = drawStart + drawEnd + len("</w:drawing>")
+
+	oldDrawing := docXML[drawStart:drawEnd]
+
+	// Replace wp:extent cx/cy
+	extentRe := regexp.MustCompile(`(<wp:extent\s+)cx="[0-9]+"(\s+)cy="[0-9]+"`)
+	newDrawing := extentRe.ReplaceAllString(oldDrawing,
+		fmt.Sprintf(`${1}cx="%d"${2}cy="%d"`, cx, cy))
+
+	// Replace a:ext cx/cy (inside pic:spPr > a:xfrm)
+	aExtRe := regexp.MustCompile(`(<a:ext\s+)cx="[0-9]+"(\s+)cy="[0-9]+"`)
+	newDrawing = aExtRe.ReplaceAllString(newDrawing,
+		fmt.Sprintf(`${1}cx="%d"${2}cy="%d"`, cx, cy))
+
+	return strings.Replace(docXML, oldDrawing, newDrawing, 1)
+}
+
 // findRelTarget finds the Target for a given rId in the rels XML
 func findRelTarget(relsXML, rID string) string {
 	pattern := `Id="` + regexp.QuoteMeta(rID) + `"[^>]*Target="([^"]+)"`
@@ -363,10 +403,11 @@ func buildImageParagraph(rID, mediaName, filename string, cx, cy int64, docPrID 
 }
 
 // pngDimensionsEMU reads a PNG and returns width/height in EMUs (English Metric Units).
-// Caps at 4.5 inches on the longest side for trade paperback sizing.
+// Enforces max width of 4.5" and max height of 6" for 6x9 trade paperback sizing.
 func pngDimensionsEMU(pngPath string) (cx, cy int64) {
 	const emuPerInch = 914400
-	const maxInches = 4.5
+	const maxWidthInches = 4.5
+	const maxHeightInches = 6.0
 
 	f, err := os.Open(pngPath)
 	if err != nil {
@@ -382,16 +423,16 @@ func pngDimensionsEMU(pngPath string) (cx, cy int64) {
 	w := float64(cfg.Width)
 	h := float64(cfg.Height)
 
-	// Images are rendered at 300 DPI, so actual inch size = pixels / 300
 	wInch := w / 300.0
 	hInch := h / 300.0
-	if wInch > maxInches || hInch > maxInches {
-		scale := 1.0
-		if wInch > hInch {
-			scale = maxInches / wInch
-		} else {
-			scale = maxInches / hInch
-		}
+
+	if wInch > maxWidthInches {
+		scale := maxWidthInches / wInch
+		wInch *= scale
+		hInch *= scale
+	}
+	if hInch > maxHeightInches {
+		scale := maxHeightInches / hInch
 		wInch *= scale
 		hInch *= scale
 	}
