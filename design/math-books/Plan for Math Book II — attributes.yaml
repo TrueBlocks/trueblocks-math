@@ -1,0 +1,349 @@
+# Plan for Math Book II — attributes.yaml
+# "The Hidden Architecture"
+#
+# Character: intellectual, "wait, really?" Structures made visible.
+# Register gravity: dry, academic, sardonic. Still warm in places. Urgent appears.
+# Setting gravity: wider geography, cities, institutions, historical periods.
+# Math visibility: more front-and-center. Still some buried for texture.
+
+essays:
+  # Part 1: The Numbers Behind the Numbers
+  - slug: benfords-law
+    arc: cold-open-mystery
+    ending: resolution
+    structure: narrative
+    entry: data
+    register: dry
+    setting: "forensic-accounting-office"
+    math_visibility: front-and-center
+
+  - slug: pareto-distribution
+    arc: catalog-of-wonders
+    ending: provocation
+    structure: catalogue
+    entry: data
+    register: sardonic
+    setting: "wealth-data-global"
+    math_visibility: front-and-center
+
+  - slug: exponential-growth
+    arc: confession
+    ending: resolution
+    structure: narrative
+    entry: contradiction
+    register: casual
+    setting: "lily-pond-morning"
+    math_visibility: woven-in
+
+  - slug: shuffling-seven
+    arc: countdown
+    ending: awe
+    structure: exposition
+    entry: cold-open
+    register: academic
+    setting: "card-table-evening"
+    math_visibility: front-and-center
+
+  - slug: kleibers-law
+    arc: zoom
+    ending: communion
+    structure: compare-contrast
+    entry: question
+    register: wonder-struck
+    setting: "natural-history-museum"
+    math_visibility: woven-in
+
+  # Part 2: Probability Against Intuition
+  - slug: monty-hall
+    arc: paradox
+    ending: resolution
+    structure: dialogue
+    entry: question
+    register: casual
+    setting: "game-show-stage"
+    math_visibility: woven-in
+
+  - slug: bayes-doctor
+    arc: slow-build
+    ending: provocation
+    structure: narrative
+    entry: setting
+    register: urgent
+    setting: "hospital-waiting-room"
+    math_visibility: woven-in
+
+  - slug: regression-mean
+    arc: demolition
+    ending: resolution
+    structure: argument
+    entry: contradiction
+    register: dry
+    setting: "sports-commentary-booth"
+    math_visibility: front-and-center
+
+  - slug: secretary-problem
+    arc: recipe
+    ending: resolution
+    structure: field-guide
+    entry: at-the-end
+    register: whimsical
+    setting: "hiring-office-manhattan"
+    math_visibility: woven-in
+
+  - slug: birthday-paradox
+    arc: paradox
+    ending: communion
+    structure: exposition
+    entry: question
+    register: warm
+    setting: "classroom-afternoon"
+    math_visibility: buried
+
+  # Part 3: Shape and Space
+  - slug: topology-coffee-mug
+    arc: slow-build
+    ending: resolution
+    structure: exposition
+    entry: cold-open
+    register: warm
+    setting: "coffee-shop-morning"
+    math_visibility: woven-in
+
+  - slug: packing-oranges
+    arc: inheritance
+    ending: resolution
+    structure: chronicle
+    entry: history
+    register: academic
+    setting: "grocery-display-and-1611-Prague"
+    math_visibility: front-and-center
+
+  - slug: voronoi-diagrams
+    arc: catalog-of-wonders
+    ending: handoff
+    structure: catalogue
+    entry: setting
+    register: wonder-struck
+    setting: "giraffe-savanna-and-city-map"
+    math_visibility: woven-in
+
+  - slug: eulers-bridges
+    arc: dual-timeline
+    ending: awe
+    structure: braided
+    entry: history
+    register: lyrical
+    setting: "1736-Konigsberg"
+    math_visibility: front-and-center
+
+  - slug: mobius-strip
+    arc: walk
+    ending: communion
+    structure: narrative
+    entry: cold-open
+    register: casual
+    setting: "art-studio-afternoon"
+    math_visibility: buried
+
+  # Part 4: Signals and Information
+  - slug: shannon-entropy
+    arc: slow-build
+    ending: provocation
+    structure: exposition
+    entry: on-the-math
+    register: academic
+    setting: "bell-labs-1948"
+    math_visibility: front-and-center
+
+  - slug: nyquist-sampling
+    arc: countdown
+    ending: resolution
+    structure: narrative
+    entry: data
+    register: clinical
+    setting: "recording-studio"
+    math_visibility: front-and-center
+
+  - slug: euler-formula-ac
+    arc: paradox
+    ending: awe
+    structure: in-medias-res
+    entry: cold-open
+    register: dry
+    setting: "electrical-panel-night"
+    math_visibility: woven-in
+
+  - slug: markov-chains-weather
+    arc: slow-build
+    ending: handoff
+    structure: exposition
+    entry: setting
+    register: casual
+    setting: "weather-station-morning"
+    math_visibility: woven-in
+
+  - slug: eulers-identity
+    arc: letter
+    ending: awe
+    structure: letter
+    entry: voice
+    register: lyrical
+    setting: "euler-berlin-1748"
+    math_visibility: front-and-center
+
+  # Part 5: Strategy and Tradeoffs
+  - slug: traveling-salesman
+    arc: cold-open-mystery
+    ending: honesty
+    structure: narrative
+    entry: setting
+    register: urgent
+    setting: "delivery-route-dawn"
+    math_visibility: front-and-center
+
+  - slug: kelly-criterion
+    arc: recipe
+    ending: resolution
+    structure: field-guide
+    entry: question
+    register: sardonic
+    setting: "racetrack-afternoon"
+    math_visibility: woven-in
+
+  - slug: amdahls-law
+    arc: demolition
+    ending: provocation
+    structure: argument
+    entry: contradiction
+    register: dry
+    setting: "tech-office-standup"
+    math_visibility: woven-in
+
+  # Part 6: The Gentle Curves
+  - slug: logarithmic-spiral
+    arc: walk
+    ending: awe
+    structure: meditation
+    entry: setting
+    register: lyrical
+    setting: "beach-spiral-shells"
+    math_visibility: woven-in
+
+  - slug: curves-of-pursuit
+    arc: cold-open-mystery
+    ending: resolution
+    structure: narrative
+    entry: cold-open
+    register: whimsical
+    setting: "garden-kittens-afternoon"
+    math_visibility: buried
+
+  - slug: lissajous-curves
+    arc: slow-build
+    ending: communion
+    structure: narrative
+    entry: setting
+    register: warm
+    setting: "science-museum-pendulum"
+    math_visibility: woven-in
+
+  - slug: spirograph-epicycloids
+    arc: dual-timeline
+    ending: handoff
+    structure: braided
+    entry: history
+    register: wonder-struck
+    setting: "toy-store-and-ancient-Alexandria"
+    math_visibility: woven-in
+
+  - slug: arbelos
+    arc: inheritance
+    ending: awe
+    structure: chronicle
+    entry: history
+    register: academic
+    setting: "ancient-Greece-geometry-school"
+    math_visibility: front-and-center
+
+  - slug: sine-waves-tides
+    arc: catalog-of-wonders
+    ending: communion
+    structure: exposition
+    entry: setting
+    register: warm
+    setting: "harbor-dawn"
+    math_visibility: woven-in
+
+  # Part 7: Thread and Fabric
+  - slug: hyperbolic-crochet
+    arc: walk
+    ending: awe
+    structure: narrative
+    entry: setting
+    register: wonder-struck
+    setting: "coral-reef-exhibition"
+    math_visibility: buried
+
+  - slug: math-of-braiding
+    arc: slow-build
+    ending: provocation
+    structure: exposition
+    entry: cold-open
+    register: academic
+    setting: "textile-workshop-global"
+    math_visibility: front-and-center
+
+  - slug: random-walks
+    arc: argument
+    ending: honesty
+    structure: argument
+    entry: data
+    register: sardonic
+    setting: "trading-floor-closing-bell"
+    math_visibility: woven-in
+
+  # Part 8: Nature's Other Ledger
+  - slug: aspens-tremble
+    arc: cold-open-mystery
+    ending: resolution
+    structure: in-medias-res
+    entry: setting
+    register: warm
+    setting: "aspen-grove-autumn"
+    math_visibility: buried
+
+  - slug: vines-twist
+    arc: walk
+    ending: handoff
+    structure: narrative
+    entry: question
+    register: casual
+    setting: "garden-trellis-morning"
+    math_visibility: woven-in
+
+  - slug: spider-silk
+    arc: zoom
+    ending: awe
+    structure: exposition
+    entry: data
+    register: clinical
+    setting: "spider-web-dawn-microscale"
+    math_visibility: front-and-center
+
+  - slug: diffusion-perfume
+    arc: slow-build
+    ending: communion
+    structure: meditation
+    entry: setting
+    register: lyrical
+    setting: "bedroom-morning-light"
+    math_visibility: buried
+
+  - slug: bell-curve-wildflowers
+    arc: confession
+    ending: communion
+    structure: narrative
+    entry: setting
+    register: warm
+    setting: "meadow-midsummer"
+    math_visibility: woven-in
